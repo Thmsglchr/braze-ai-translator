@@ -8,12 +8,15 @@ importers:
 
   .:
     devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.0
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
       vitest:
         specifier: ^2.1.8
-        version: 2.1.9
+        version: 2.1.9(@types/node@24.12.0)
 
   apps/backend: {}
 
@@ -21,9 +24,17 @@ importers:
 
   packages/csv-utils: {}
 
-  packages/liquid-engine: {}
+  packages/liquid-engine:
+    dependencies:
+      '@braze-ai-translator/schemas':
+        specifier: workspace:*
+        version: link:../schemas
 
-  packages/schemas: {}
+  packages/schemas:
+    dependencies:
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
 
 packages:
 
@@ -296,6 +307,9 @@ packages:
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
 
+  '@types/node@24.12.0':
+    resolution: {integrity: sha512-GYDxsZi3ChgmckRT9HPU0WEhKLP08ev/Yfcq2AstjrDASOYCSXeyjDsHg4v5t4jOj7cyDX3vmprafKlWIG9MXQ==}
+
   '@vitest/expect@2.1.9':
     resolution: {integrity: sha512-UJCIkTBenHeKT1TTlKMJWy1laZewsRIzYighyYiJKZreqtdxSos/S1t+ktRMQWu2CKqaarrkeszJx1cgC5tGZw==}
 
@@ -443,6 +457,9 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
+  undici-types@7.16.0:
+    resolution: {integrity: sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==}
+
   vite-node@2.1.9:
     resolution: {integrity: sha512-AM9aQ/IPrW/6ENLQg3AGY4K1N2TGZdR5e4gu/MmmR2xR3Ll1+dib+nook92g4TV3PXVyeyxdWwtaCAiUL0hMxA==}
     engines: {node: ^18.0.0 || >=20.0.0}
@@ -508,6 +525,9 @@ packages:
     resolution: {integrity: sha512-hUrmaWBdVDcxvYqnyh09zunKzROWjbZTiNy8dBEjkS7ehEDQibXJ7XvlmtbwuTclUiIyN+CyXQD4Vmko8fNm8w==}
     engines: {node: '>=8'}
     hasBin: true
+
+  zod@3.25.76:
+    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
 snapshots:
 
@@ -659,6 +679,10 @@ snapshots:
 
   '@types/estree@1.0.8': {}
 
+  '@types/node@24.12.0':
+    dependencies:
+      undici-types: 7.16.0
+
   '@vitest/expect@2.1.9':
     dependencies:
       '@vitest/spy': 2.1.9
@@ -666,13 +690,13 @@ snapshots:
       chai: 5.3.3
       tinyrainbow: 1.2.0
 
-  '@vitest/mocker@2.1.9(vite@5.4.21)':
+  '@vitest/mocker@2.1.9(vite@5.4.21(@types/node@24.12.0))':
     dependencies:
       '@vitest/spy': 2.1.9
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 5.4.21
+      vite: 5.4.21(@types/node@24.12.0)
 
   '@vitest/pretty-format@2.1.9':
     dependencies:
@@ -829,13 +853,15 @@ snapshots:
 
   typescript@5.9.3: {}
 
-  vite-node@2.1.9:
+  undici-types@7.16.0: {}
+
+  vite-node@2.1.9(@types/node@24.12.0):
     dependencies:
       cac: 6.7.14
       debug: 4.4.3
       es-module-lexer: 1.7.0
       pathe: 1.1.2
-      vite: 5.4.21
+      vite: 5.4.21(@types/node@24.12.0)
     transitivePeerDependencies:
       - '@types/node'
       - less
@@ -847,18 +873,19 @@ snapshots:
       - supports-color
       - terser
 
-  vite@5.4.21:
+  vite@5.4.21(@types/node@24.12.0):
     dependencies:
       esbuild: 0.21.5
       postcss: 8.5.8
       rollup: 4.59.0
     optionalDependencies:
+      '@types/node': 24.12.0
       fsevents: 2.3.3
 
-  vitest@2.1.9:
+  vitest@2.1.9(@types/node@24.12.0):
     dependencies:
       '@vitest/expect': 2.1.9
-      '@vitest/mocker': 2.1.9(vite@5.4.21)
+      '@vitest/mocker': 2.1.9(vite@5.4.21(@types/node@24.12.0))
       '@vitest/pretty-format': 2.1.9
       '@vitest/runner': 2.1.9
       '@vitest/snapshot': 2.1.9
@@ -874,9 +901,11 @@ snapshots:
       tinyexec: 0.3.2
       tinypool: 1.1.1
       tinyrainbow: 1.2.0
-      vite: 5.4.21
-      vite-node: 2.1.9
+      vite: 5.4.21(@types/node@24.12.0)
+      vite-node: 2.1.9(@types/node@24.12.0)
       why-is-node-running: 2.3.0
+    optionalDependencies:
+      '@types/node': 24.12.0
     transitivePeerDependencies:
       - less
       - lightningcss
@@ -892,3 +921,5 @@ snapshots:
     dependencies:
       siginfo: 2.0.0
       stackback: 0.0.2
+
+  zod@3.25.76: {}

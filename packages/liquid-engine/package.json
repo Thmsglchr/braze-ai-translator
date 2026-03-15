@@ -11,6 +11,9 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@braze-ai-translator/schemas": "workspace:*"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json"
   }
