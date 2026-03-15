@@ -1,0 +1,5 @@
+Hello {{ first_name | default: 'friend' }}!
+
+{% if customer_tier == 'vip' %}
+Thanks for being a VIP.
+{% endif %}

@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./apps/extension" },
+    { "path": "./apps/backend" },
+    { "path": "./packages/schemas" },
+    { "path": "./packages/liquid-engine" },
+    { "path": "./packages/csv-utils" }
+  ]
+}
