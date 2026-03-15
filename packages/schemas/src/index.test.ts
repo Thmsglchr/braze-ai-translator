@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ApiErrorResponseSchema,
+  BrazeSyncRequestSchema,
+  BrazeSyncResultSchema,
   ExtractedContentPayloadSchema,
   TransformResultSchema,
   TranslationRequestSchema,
   TranslationResponseSchema,
+  type ApiErrorResponse,
+  type BrazeSyncRequest,
+  type BrazeSyncResult,
   type ExtractedContentPayload,
   type TranslationEntry,
   type ValidationError
@@ -57,6 +63,45 @@ const samplePayload: ExtractedContentPayload = {
   translationEntries: [sampleEntry],
   validationErrors: [],
   extractedAt: "2026-03-15T18:30:00.000Z"
+};
+
+const sampleSyncRequest: BrazeSyncRequest = {
+  syncId: "sync.1",
+  requestId: "request.3",
+  translations: [
+    {
+      entryId: sampleEntry.entryId,
+      targetLocale: "fr-FR",
+      translatedText: "Bonjour ami",
+      translatedTextChecksum: "sha256:bonjour-ami",
+      validationErrors: []
+    }
+  ],
+  requestedAt: "2026-03-15T18:40:00.000Z"
+};
+
+const sampleSyncResult: BrazeSyncResult = {
+  syncId: "sync.1",
+  requestId: "request.3",
+  syncStatus: "success",
+  syncedEntryCount: 1,
+  syncedTranslations: [
+    {
+      entryId: sampleEntry.entryId,
+      targetLocale: "fr-FR",
+      brazeContentBlockKey: "tr_abc123ef456789ab",
+      syncStatus: "synced",
+      message: "Mock sync completed."
+    }
+  ],
+  validationErrors: [],
+  completedAt: "2026-03-15T18:41:00.000Z"
+};
+
+const sampleApiError: ApiErrorResponse = {
+  errorCode: "invalid_request",
+  message: "Request body did not match the expected contract.",
+  validationErrors: [sampleValidationError]
 };
 
 describe("schema contracts", () => {
@@ -162,5 +207,33 @@ describe("schema contracts", () => {
 
     expect(result.responseStatus).toBe("partial");
     expect(result.translations[1]?.validationErrors).toHaveLength(1);
+  });
+
+  it("parses Braze mock sync contracts", () => {
+    expect(BrazeSyncRequestSchema.parse(sampleSyncRequest).translations).toHaveLength(
+      1
+    );
+    expect(BrazeSyncResultSchema.parse(sampleSyncResult).syncedEntryCount).toBe(
+      1
+    );
+  });
+
+  it("rejects duplicate translation pairs in a Braze mock sync request", () => {
+    const result = BrazeSyncRequestSchema.safeParse({
+      ...sampleSyncRequest,
+      translations: [
+        sampleSyncRequest.translations[0],
+        sampleSyncRequest.translations[0]
+      ]
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("parses API error responses", () => {
+    const result = ApiErrorResponseSchema.parse(sampleApiError);
+
+    expect(result.errorCode).toBe("invalid_request");
+    expect(result.validationErrors).toHaveLength(1);
   });
 });

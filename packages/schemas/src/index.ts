@@ -283,6 +283,96 @@ export const TranslationResponseSchema = z
     );
   });
 
+export const BrazeSyncRequestSchema = z
+  .object({
+    syncId: IdentifierSchema,
+    requestId: IdentifierSchema.optional(),
+    translations: z.array(TranslationResponseEntrySchema).min(1),
+    requestedAt: IsoDatetimeSchema
+  })
+  .superRefine((value, ctx) => {
+    addDuplicateValueIssues(
+      value.translations.map(
+        (translation) => `${translation.entryId}::${translation.targetLocale}`
+      ),
+      ["translations"],
+      ctx,
+      "translations must not contain duplicate entryId and targetLocale pairs."
+    );
+  });
+
+export const BrazeSyncItemStatusSchema = z.enum([
+  "synced",
+  "skipped",
+  "failed"
+]);
+
+export const BrazeSyncItemSchema = z.object({
+  entryId: IdentifierSchema,
+  targetLocale: LocaleCodeSchema,
+  brazeContentBlockKey: IdentifierSchema,
+  syncStatus: BrazeSyncItemStatusSchema,
+  message: NonBlankStringSchema.optional()
+});
+
+export const BrazeSyncResultStatusSchema = z.enum([
+  "success",
+  "partial",
+  "failed"
+]);
+
+export const BrazeSyncResultSchema = z
+  .object({
+    syncId: IdentifierSchema,
+    requestId: IdentifierSchema.optional(),
+    syncStatus: BrazeSyncResultStatusSchema,
+    syncedEntryCount: z.number().int().nonnegative(),
+    syncedTranslations: z.array(BrazeSyncItemSchema),
+    validationErrors: z.array(ValidationErrorSchema),
+    completedAt: IsoDatetimeSchema
+  })
+  .superRefine((value, ctx) => {
+    if (value.syncedEntryCount > value.syncedTranslations.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "syncedEntryCount must not exceed syncedTranslations.length.",
+        path: ["syncedEntryCount"]
+      });
+    }
+
+    if (
+      value.syncStatus === "success" &&
+      value.syncedEntryCount !== value.syncedTranslations.length
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Successful sync results must count every translated entry as synced.",
+        path: ["syncedEntryCount"]
+      });
+    }
+
+    if (value.syncStatus === "failed" && value.syncedEntryCount !== 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Failed sync results must not report synced entries.",
+        path: ["syncedEntryCount"]
+      });
+    }
+  });
+
+export const ApiErrorCodeSchema = z.enum([
+  "invalid_request",
+  "internal_error"
+]);
+
+export const ApiErrorResponseSchema = z.object({
+  errorCode: ApiErrorCodeSchema,
+  message: NonBlankStringSchema,
+  validationErrors: z.array(ValidationErrorSchema)
+});
+
 export type TextRange = z.infer<typeof TextRangeSchema>;
 export type BrazeMessageChannel = z.infer<typeof BrazeMessageChannelSchema>;
 export type ContentFieldType = z.infer<typeof ContentFieldTypeSchema>;
@@ -303,3 +393,12 @@ export type TranslationResponseEntry = z.infer<
   typeof TranslationResponseEntrySchema
 >;
 export type TranslationResponse = z.infer<typeof TranslationResponseSchema>;
+export type BrazeSyncRequest = z.infer<typeof BrazeSyncRequestSchema>;
+export type BrazeSyncItemStatus = z.infer<typeof BrazeSyncItemStatusSchema>;
+export type BrazeSyncItem = z.infer<typeof BrazeSyncItemSchema>;
+export type BrazeSyncResultStatus = z.infer<
+  typeof BrazeSyncResultStatusSchema
+>;
+export type BrazeSyncResult = z.infer<typeof BrazeSyncResultSchema>;
+export type ApiErrorCode = z.infer<typeof ApiErrorCodeSchema>;
+export type ApiErrorResponse = z.infer<typeof ApiErrorResponseSchema>;

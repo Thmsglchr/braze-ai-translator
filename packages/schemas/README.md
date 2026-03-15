@@ -12,6 +12,8 @@ future extension -> backend -> translation -> Braze pipeline:
 - transform results for auditable tag insertion
 - structured validation errors
 - future translation request and response contracts
+- mock Braze sync request and response contracts
+- shared API error responses
 
 ## Design Rules
 
@@ -31,6 +33,9 @@ future extension -> backend -> translation -> Braze pipeline:
 - `ValidationErrorSchema`
 - `TranslationRequestSchema`
 - `TranslationResponseSchema`
+- `BrazeSyncRequestSchema`
+- `BrazeSyncResultSchema`
+- `ApiErrorResponseSchema`
 
 Import from `@braze-ai-translator/schemas` once the package is consumed by
 the other workspaces.
