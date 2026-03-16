@@ -1,54 +1,123 @@
-# Backend MVP
+# AI Translation Server
 
-Minimal Fastify backend for exercising the local localization pipeline.
-The transform and Braze sync steps stay local-only, while the primary
-translation route now calls OpenAI through a backend provider.
+This app is the server-side core of the Braze localization assistant.
 
-## Endpoints
+It owns:
+
+- Liquid-safe transformation
+- Braze template translation orchestration
+- OpenAI translation orchestration
+- CSV export and import
+- validation of AI and CSV output
+- Braze sync orchestration, with mock sync today
+
+It does not rely on the browser client for business logic or secrets.
+
+## POC Workflows
+
+### Editor Preparation
+
+The browser extension captures Braze editor content, sends
+`ExtractedContentPayload` to `POST /transform`, and receives `TransformResult`
+with transformed Liquid plus extracted `TranslationEntry` records.
+
+### Template ID Translation
+
+`POST /template/translate` accepts `TemplateTranslateRequest`, retrieves
+Braze template translation data, translates only missing locale values,
+validates the output, and returns `TemplateTranslateResponse`.
+
+The backend keeps richer internal workflow contracts for this path:
+
+- `TemplateTranslationRequest` / `TemplateTranslationResult`
+- `BrazeTemplateSourceData`
+- `BrazeTemplatePushRequest` / `BrazeTemplatePushResult`
+
+## Current Route Surface
 
 - `POST /transform`
   - request: `ExtractedContentPayload`
   - response: `TransformResult`
+- `POST /template/translate`
+  - request: `TemplateTranslateRequest`
+  - response: `TemplateTranslateResponse`
 - `POST /translate`
   - request: `TranslationRequest`
   - response: `TranslationResponse`
 - `POST /translate/mock`
   - request: `TranslationRequest`
   - response: `TranslationResponse`
+- `POST /csv/export`
+  - request: `CsvExportRequest`
+  - response: `CsvExportResponse`
+- `POST /csv/import`
+  - request: `CsvImportRequest`
+  - response: `CsvImportResponse`
 - `POST /braze/mock-sync`
   - request: `BrazeSyncRequest`
   - response: `BrazeSyncResult`
 
-## Design
+All route payloads are validated with the shared schemas package.
 
-- request and response payloads are validated with the shared `zod` schemas
-- route handlers stay thin and delegate behavior to provider interfaces
-- the default translation provider lives in `src/providers/openaiTranslator.ts`
-- the mock translation provider remains available for tests and local smoke runs
-- tests use `fastify.inject()` to exercise the HTTP layer in-process
+## Responsibilities
 
-## Translation Pipeline
+The server keeps route handlers thin and delegates behavior to provider
+interfaces. Today that includes:
 
-`POST /translate` accepts `translationEntries` from the Liquid engine and
-translates only each entry's `sourceText`.
+- transform provider
+- template translation provider
+- translation provider
+- CSV provider
+- Braze sync provider
+- Braze template client boundary
 
-Before an entry is sent to OpenAI, the backend replaces protected syntax with
-temporary tokens:
+The OpenAI translation provider protects Liquid and placeholder syntax before
+translation, restores it afterward, and fails closed when restoration is
+unsafe.
 
-- Liquid output blocks such as `{{ first_name }}`
-- Liquid tags such as `{% if vip %}`
-- Handlebars-style placeholders such as `{{name}}` and `{{{name}}}`
+The default Braze template client is a typed placeholder with explicit TODOs.
+Real Braze retrieval and writeback still need to be implemented behind that
+interface.
 
-The provider then:
+## Client Boundary
 
-1. sends the protected text to OpenAI
-2. receives translated text
-3. verifies every protected token is still present exactly once
-4. restores the original placeholders verbatim
-5. returns validation errors instead of guessing when restoration is unsafe
+The browser client should only:
 
-This keeps placeholder preservation in the backend and leaves
-`packages/liquid-engine` unchanged.
+- detect supported pages
+- extract raw content
+- call the server routes
+- render debug or review UI
+
+The browser client must not:
+
+- hold `OPENAI_API_KEY`
+- hold Braze secrets
+- rewrite Liquid
+- implement CSV or Braze orchestration logic
+
+## Shared Contracts
+
+- editor preparation:
+  - `ExtractedContentPayload`
+  - `TranslationEntry`
+  - `TransformResult`
+- template translate route:
+  - `TemplateTranslateRequest`
+  - `TemplateTranslateResponse`
+- template translation orchestration:
+  - `TemplateTranslationRequest`
+  - `TemplateTranslationResult`
+  - `TranslationSummary`
+- Braze template boundaries:
+  - `BrazeTemplateSourceData`
+  - `BrazeTemplatePushRequest`
+  - `BrazeTemplatePushResult`
+- server execution building blocks:
+  - `TranslationRequest`
+  - `TranslationResponse`
+  - `CsvExportRequest` / `CsvExportResponse`
+  - `CsvImportRequest` / `CsvImportResponse`
+  - `BrazeSyncRequest` / `BrazeSyncResult`
 
 ## Environment
 
@@ -57,6 +126,20 @@ This keeps placeholder preservation in the backend and leaves
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 
-If either variable is missing, the OpenAI translation route fails with a
-backend error. `POST /translate/mock` remains available when you need a
-deterministic local-only path.
+`POST /template/translate` uses the same OpenAI settings. Real Braze access
+still requires a concrete `BrazeTemplateClient` implementation.
+
+`POST /translate/mock` remains available for deterministic local-only testing.
+
+## Local Server
+
+Build the backend and run:
+
+```bash
+pnpm --filter @braze-ai-translator/backend start
+```
+
+The default local server address is `http://127.0.0.1:8787`.
+
+For the full server contract, see
+[docs/server-api.md](/Users/T.GuilcherTrouche/Documents/Dev/braze-ai-translator/docs/server-api.md).

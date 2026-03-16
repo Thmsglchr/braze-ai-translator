@@ -20,6 +20,9 @@ importers:
 
   apps/backend:
     dependencies:
+      '@braze-ai-translator/csv-utils':
+        specifier: workspace:*
+        version: link:../../packages/csv-utils
       '@braze-ai-translator/liquid-engine':
         specifier: workspace:*
         version: link:../../packages/liquid-engine
@@ -33,7 +36,11 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
-  apps/extension: {}
+  apps/extension:
+    dependencies:
+      '@braze-ai-translator/schemas':
+        specifier: workspace:*
+        version: link:../../packages/schemas
 
   packages/csv-utils: {}
 

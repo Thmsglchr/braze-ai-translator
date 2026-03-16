@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Braze Localization Assistant Debug",
+  "version": "0.0.0",
+  "description": "Read-only debug overlay for extracting page content and calling the local Braze localization backend.",
+  "action": {
+    "default_title": "Braze Localization Assistant Debug"
+  },
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "permissions": ["storage", "contextMenus"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://*.braze.com/*", "*://*.appboy.com/*", "*://*.braze.eu/*"],
+      "js": [
+        "dist/contentScript.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

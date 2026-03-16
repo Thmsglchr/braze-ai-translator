@@ -3,7 +3,10 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "dependencies": {
+    "@braze-ai-translator/schemas": "workspace:*"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json && node scripts/fix-content-scripts.mjs"
   }
 }

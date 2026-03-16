@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Braze Email Editor Demo</title>
+    <style>
+      body {
+        margin: 0;
+        font: 16px/1.5 sans-serif;
+        background: #f4f4f4;
+        color: #111;
+      }
+
+      header,
+      nav,
+      main {
+        padding: 16px 24px;
+      }
+
+      nav {
+        background: #1d2330;
+        color: #fff;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        gap: 24px;
+        align-items: start;
+      }
+
+      aside,
+      section {
+        background: #fff;
+        border: 1px solid #d7d7d7;
+        border-radius: 6px;
+      }
+
+      aside {
+        padding: 16px;
+      }
+
+      section {
+        padding: 20px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      label {
+        display: grid;
+        gap: 8px;
+        font-weight: 600;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        font: 14px/1.5 monospace;
+        border: 1px solid #bbb;
+        border-radius: 4px;
+        padding: 10px;
+        box-sizing: border-box;
+      }
+
+      textarea {
+        min-height: 240px;
+      }
+    </style>
+  </head>
+  <body>
+    <nav data-testid="braze-shell-nav">Braze Dashboard Demo</nav>
+    <header>
+      <h1>Campaign Composer</h1>
+      <p>Local fixture for the Braze adapter write-back POC.</p>
+    </header>
+    <main class="layout">
+      <aside>
+        <strong>Sidebar</strong>
+        <p>Audience</p>
+        <p>Scheduling</p>
+        <p>Tags</p>
+      </aside>
+      <section data-testid="braze-email-editor">
+        <div class="stack">
+          <label>
+            Subject
+            <input
+              type="text"
+              aria-label="Email subject"
+              value="Hello {{ first_name }}, your order ships today"
+            />
+          </label>
+          <label>
+            Preheader
+            <input
+              type="text"
+              aria-label="Email preheader"
+              value="Track your package and delivery status."
+            />
+          </label>
+          <label>
+            HTML Editor
+            <textarea
+              aria-label="Email HTML editor"
+              data-testid="email-html-editor"
+            ><div>
+  <p>Hello {{ first_name }},</p>
+  <p>Your order {% if loyalty_tier == "gold" %}qualifies for free express shipping{% endif %}.</p>
+  <p><a href="https://example.com/orders/{{ order_id }}">Track your order</a></p>
+</div></textarea>
+          </label>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

@@ -5,7 +5,15 @@ import {
   ApiErrorResponseSchema,
   BrazeSyncRequestSchema,
   BrazeSyncResultSchema,
+  CanvasTranslateRequestSchema,
+  CanvasTranslateResponseSchema,
+  CsvExportRequestSchema,
+  CsvExportResponseSchema,
+  CsvImportRequestSchema,
+  CsvImportResponseSchema,
   ExtractedContentPayloadSchema,
+  TemplateTranslateRequestSchema,
+  TemplateTranslateResponseSchema,
   TransformResultSchema,
   TranslationRequestSchema,
   TranslationResponseSchema,
@@ -13,6 +21,10 @@ import {
   type ApiErrorCode,
   type ApiErrorResponse,
   type BrazeSyncResult,
+  type CanvasTranslateResponse,
+  type CsvExportResponse,
+  type CsvImportResponse,
+  type TemplateTranslateResponse,
   type TransformResult,
   type TranslationResponse,
   type ValidationError
@@ -21,8 +33,12 @@ import {
 import {
   createDefaultProviders,
   MockTranslationProvider,
+  OpenAITranslationProvider,
   type BackendProviders
 } from "./providers.js";
+
+import { BrazeCanvasClient } from "./providers/brazeCanvas.js";
+import { CanvasTranslationWorkflowProvider } from "./providers/canvasTranslation.js";
 
 export interface BackendAppOptions {
   readonly providers?: Partial<BackendProviders>;
@@ -39,10 +55,16 @@ export function buildBackendApp(
     transformProvider:
       options.providers?.transformProvider ?? defaultProviders.transformProvider,
     translationProvider:
-      options.providers?.translationProvider ??
-      defaultProviders.translationProvider,
+      options.providers?.translationProvider ?? defaultProviders.translationProvider,
+    csvProvider:
+      options.providers?.csvProvider ?? defaultProviders.csvProvider,
     brazeSyncProvider:
-      options.providers?.brazeSyncProvider ?? defaultProviders.brazeSyncProvider
+      options.providers?.brazeSyncProvider ?? defaultProviders.brazeSyncProvider,
+    brazeTemplateClient:
+      options.providers?.brazeTemplateClient ?? defaultProviders.brazeTemplateClient,
+    templateTranslationProvider:
+      options.providers?.templateTranslationProvider ??
+      defaultProviders.templateTranslationProvider
   };
   const mockTranslationProvider = new MockTranslationProvider({ now });
 
@@ -104,6 +126,118 @@ export function buildBackendApp(
     );
   });
 
+  app.post("/canvas/translate", async (request, reply) => {
+    const parsedBody = CanvasTranslateRequestSchema.safeParse(request.body);
+
+    if (!parsedBody.success) {
+      return sendInvalidRequest(
+        reply,
+        "Request body must match the canvas translate request contract.",
+        parsedBody.error
+      );
+    }
+
+    const headers = request.headers as Record<
+      string,
+      string | string[] | undefined
+    >;
+    const brazeApiKey = getHeader(headers, "x-braze-api-key");
+    const brazeRestApiUrl = getHeader(headers, "x-braze-rest-api-url");
+    const openaiApiKey = getHeader(headers, "x-openai-api-key");
+
+    if (brazeApiKey === undefined || brazeRestApiUrl === undefined) {
+      return sendApiError(
+        reply,
+        400,
+        "invalid_request",
+        "X-Braze-Api-Key and X-Braze-Rest-Api-Url headers are required."
+      );
+    }
+
+    const canvasClient = new BrazeCanvasClient({
+      apiKey: brazeApiKey,
+      restApiBaseUrl: brazeRestApiUrl
+    });
+
+    const translationProv = openaiApiKey !== undefined
+      ? new OpenAITranslationProvider({
+          now,
+          apiKey: openaiApiKey,
+          model:
+            getHeader(headers, "x-openai-model") ??
+            process.env.OPENAI_MODEL ??
+            "gpt-4.1-mini"
+        })
+      : providers.translationProvider;
+
+    const canvasWorkflow = new CanvasTranslationWorkflowProvider({
+      now,
+      translationProvider: translationProv,
+      canvasClient
+    });
+
+    return executeRoute<CanvasTranslateResponse>(
+      reply,
+      async () => canvasWorkflow.translateCanvas(parsedBody.data.canvasId),
+      CanvasTranslateResponseSchema
+    );
+  });
+
+  app.post("/template/translate", async (request, reply) => {
+    const parsedBody = TemplateTranslateRequestSchema.safeParse(request.body);
+
+    if (!parsedBody.success) {
+      return sendInvalidRequest(
+        reply,
+        "Request body must match the template translate request contract.",
+        parsedBody.error
+      );
+    }
+
+    return executeRoute<TemplateTranslateResponse>(
+      reply,
+      async () =>
+        providers.templateTranslationProvider.translateTemplate(parsedBody.data),
+      TemplateTranslateResponseSchema
+    );
+  });
+
+  app.post("/csv/export", async (request, reply) => {
+    const parsedBody = CsvExportRequestSchema.safeParse(request.body);
+
+    if (!parsedBody.success) {
+      return sendInvalidRequest(
+        reply,
+        "Request body must match the CSV export request contract.",
+        parsedBody.error
+      );
+    }
+
+    return executeRoute<CsvExportResponse>(
+      reply,
+      async () => providers.csvProvider.export(parsedBody.data),
+      CsvExportResponseSchema
+    );
+  });
+
+  app.post("/csv/import", async (request, reply) => {
+    const parsedBody = CsvImportRequestSchema.safeParse(request.body);
+
+    if (!parsedBody.success) {
+      return sendInvalidRequest(
+        reply,
+        "Request body must match the CSV import request contract.",
+        parsedBody.error
+      );
+    }
+
+    return executeRoute<CsvImportResponse>(
+      reply,
+      async () => providers.csvProvider.import(parsedBody.data),
+      CsvImportResponseSchema
+    );
+  });
+
   app.post("/braze/mock-sync", async (request, reply) => {
     const parsedBody = BrazeSyncRequestSchema.safeParse(request.body);
 
@@ -145,11 +279,14 @@ async function executeRoute<TResponse>(
       );
     }
 
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+
     return sendApiError(
       reply,
       500,
       "internal_error",
-      "The backend mock pipeline failed unexpectedly."
+      `Server error: ${errorMessage}`
     );
   }
 }
@@ -212,6 +349,23 @@ function convertZodIssueToValidationError(issue: ZodError["issues"][number]): Va
     severity: "error",
     fieldPathSegments: issue.path.length > 0 ? issue.path : undefined
   });
+}
+
+function getHeader(
+  headers: Record<string, string | string[] | undefined>,
+  name: string
+): string | undefined {
+  const value = headers[name];
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  if (Array.isArray(value) && value.length > 0) {
+    return value[0]?.trim();
+  }
+
+  return undefined;
 }
 
 function createNowIsoTimestamp(): string {

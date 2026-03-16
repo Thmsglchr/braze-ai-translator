@@ -1,0 +1,5 @@
+<div>
+  <p>Hello {{ first_name }},</p>
+  <p>Your order {% if loyalty_tier == "gold" %}qualifies for free express shipping{% endif %}.</p>
+  <p><a href="https://example.com/orders/{{ order_id }}">Track your order</a></p>
+</div>

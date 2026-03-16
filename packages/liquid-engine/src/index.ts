@@ -14,7 +14,23 @@ import {
 
 const DEFAULT_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 const CONTEXT_WINDOW_SIZE = 20;
-const UNSUPPORTED_HTML_TAG_NAMES = new Set(["script", "style"]);
+const SKIPPED_HTML_TAG_NAMES = new Set(["script", "style"]);
+const INLINE_LIQUID_TAG_NAMES = new Set([
+  "if",
+  "elsif",
+  "else",
+  "endif",
+  "unless",
+  "endunless",
+  "case",
+  "when",
+  "endcase",
+  "for",
+  "endfor",
+  "tablerow",
+  "endtablerow"
+]);
+const DISALLOWED_LIQUID_TAG_NAMES = new Set(["translation", "endtranslation"]);
 
 type StructuralTokenKind =
   | "text"
@@ -126,8 +142,8 @@ export function tagLiquidTemplate(
   const validationErrors = analysis.validationErrors;
   const translationEntries =
     validationErrors.length === 0
-      ? analysis.candidateSpans.map((span) =>
-          createTranslationEntry(request, span)
+      ? analysis.candidateSpans.map((span, index) =>
+          createTranslationEntry(request, span, index)
         )
       : [];
 
@@ -281,11 +297,58 @@ function analyzeContent(
     };
   }
 
+  const liquidTagValidationErrors = validateSupportedLiquidTags(tokenization.tokens);
+
+  if (liquidTagValidationErrors.length > 0) {
+    return {
+      candidateSpans: [],
+      detectedLiquid:
+        liquidValidation.detectedLiquid || tokenization.detectedLiquid,
+      validationErrors: liquidTagValidationErrors
+    };
+  }
+
   return {
     candidateSpans: collectCandidateSpans(rawContent, tokenization.tokens),
     detectedLiquid: liquidValidation.detectedLiquid || tokenization.detectedLiquid,
     validationErrors: []
   };
+}
+
+function validateSupportedLiquidTags(
+  tokens: readonly StructuralToken[]
+): readonly ValidationError[] {
+  const validationErrors: ValidationError[] = [];
+
+  for (const token of tokens) {
+    if (token.kind !== "liquid_tag") {
+      continue;
+    }
+
+    const liquidTagName = getLiquidTagName(token.value);
+
+    if (liquidTagName === null) {
+      continue;
+    }
+
+    if (DISALLOWED_LIQUID_TAG_NAMES.has(liquidTagName)) {
+      validationErrors.push(
+        createValidationError({
+          errorCode: "unsupported_content",
+          message:
+            "Existing Braze translation tags are not supported as transform input.",
+          fieldPathSegments: ["rawContent"],
+          sourceRange: {
+            startOffset: token.startOffset,
+            endOffsetExclusive: token.endOffsetExclusive
+          }
+        })
+      );
+      break;
+    }
+  }
+
+  return validationErrors;
 }
 
 function validateLiquidTokens(rawContent: string): {
@@ -296,6 +359,13 @@ function validateLiquidTokens(rawContent: string): {
   let detectedLiquid = false;
 
   for (let index = 0; index < rawContent.length; index += 1) {
+    const skipEnd = skipNonLiquidBlock(rawContent, index);
+
+    if (skipEnd !== null) {
+      index = skipEnd - 1;
+      continue;
+    }
+
     if (rawContent.startsWith("{{", index)) {
       detectedLiquid = true;
       const endOffsetExclusive = findLiquidTokenEnd(rawContent, index + 2, "}}");
@@ -362,6 +432,39 @@ function validateLiquidTokens(rawContent: string): {
     detectedLiquid,
     validationErrors
   };
+}
+
+function skipNonLiquidBlock(
+  rawContent: string,
+  index: number
+): number | null {
+  if (rawContent.startsWith("<!--", index)) {
+    const commentEnd = rawContent.indexOf("-->", index + 4);
+
+    return commentEnd !== -1 ? commentEnd + 3 : rawContent.length;
+  }
+
+  for (const tagName of SKIPPED_HTML_TAG_NAMES) {
+    const openTag = `<${tagName}`;
+
+    if (
+      rawContent.startsWith(openTag, index) &&
+      !rawContent.startsWith("</", index)
+    ) {
+      const nextChar = rawContent[index + openTag.length];
+
+      if (nextChar === ">" || nextChar === " " || nextChar === "\n") {
+        const closeTag = `</${tagName}>`;
+        const closeIndex = rawContent.indexOf(closeTag, index);
+
+        return closeIndex !== -1
+          ? closeIndex + closeTag.length
+          : rawContent.length;
+      }
+    }
+  }
+
+  return null;
 }
 
 function tokenizeContent(
@@ -443,20 +546,23 @@ function tokenizeContent(
 
       if (
         htmlTagScanResult.tagName !== undefined &&
-        UNSUPPORTED_HTML_TAG_NAMES.has(htmlTagScanResult.tagName)
+        SKIPPED_HTML_TAG_NAMES.has(htmlTagScanResult.tagName) &&
+        !rawContent.startsWith("</", cursor)
       ) {
-        validationErrors.push(
-          createValidationError({
-            errorCode: "unsupported_content",
-            message: `HTML <${htmlTagScanResult.tagName}> tags are not supported by the MVP liquid engine.`,
-            fieldPathSegments: ["rawContent"],
-            sourceRange: {
-              startOffset: cursor,
-              endOffsetExclusive: htmlTagScanResult.endOffsetExclusive
-            }
-          })
+        const closingTag = `</${htmlTagScanResult.tagName}>`;
+        const closingIndex = rawContent.indexOf(
+          closingTag,
+          htmlTagScanResult.endOffsetExclusive
         );
-        break;
+
+        if (closingIndex !== -1) {
+          cursor = closingIndex + closingTag.length;
+        } else {
+          cursor = rawContent.length;
+        }
+
+        textStart = cursor;
+        continue;
       }
 
       tokens.push({
@@ -530,7 +636,7 @@ function collectCandidateSpans(
     activeBuilder.plainText += value;
   };
 
-  const appendLiquidOutput = (token: StructuralToken): void => {
+  const appendLiquidToken = (token: StructuralToken): void => {
     if (activeBuilder === null) {
       activeBuilder = {
         startOffset: token.startOffset,
@@ -551,10 +657,17 @@ function collectCandidateSpans(
         appendTextTokenRanges(token, appendRange, flushBuilder);
         break;
       case "liquid_output":
-        appendLiquidOutput(token);
+        appendLiquidToken(token);
+        break;
+      case "liquid_tag":
+        if (shouldKeepLiquidTagWithinTranslation(token.value)) {
+          appendLiquidToken(token);
+          break;
+        }
+
+        flushBuilder();
         break;
       case "html_tag":
-      case "liquid_tag":
         flushBuilder();
         break;
     }
@@ -610,7 +723,10 @@ function insertTranslationTags(
 
   for (const translationEntry of translationEntries) {
     taggedContent += rawContent.slice(cursor, translationEntry.sourceRange.startOffset);
-    taggedContent += createBrazeTranslationTag(translationEntry.entryId);
+    taggedContent += createTranslationBlock(
+      translationEntry.entryId,
+      translationEntry.sourceText
+    );
     cursor = translationEntry.sourceRange.endOffsetExclusive;
   }
 
@@ -621,18 +737,10 @@ function insertTranslationTags(
 
 function createTranslationEntry(
   request: NormalizedLiquidTaggingRequest,
-  candidateSpan: CandidateSpan
+  candidateSpan: CandidateSpan,
+  index: number
 ): TranslationEntry {
-  const entryId = createDeterministicIdentifier(
-    "tr",
-    [
-      request.extractionId,
-      request.contentFieldKey,
-      String(candidateSpan.startOffset),
-      String(candidateSpan.endOffsetExclusive),
-      candidateSpan.sourceText
-    ].join(":")
-  );
+  const entryId = `item_${index + 1}`;
 
   return {
     entryId,
@@ -825,7 +933,31 @@ function isTranslatableCandidate(plainText: string): boolean {
     return false;
   }
 
-  return !isStandaloneUrl(trimmed);
+  if (isStandaloneUrl(trimmed)) {
+    return false;
+  }
+
+  const decoded = decodeHtmlCharacterReferences(trimmed);
+
+  return /[\p{L}\p{N}]/u.test(decoded);
+}
+
+function decodeHtmlCharacterReferences(text: string): string {
+  return text
+    .replace(/&#x([0-9a-fA-F]+);/g, (match, hex: string) => {
+      const codePoint = parseInt(hex, 16);
+
+      return codePoint > 0 && codePoint <= 0x10FFFF
+        ? String.fromCodePoint(codePoint)
+        : match;
+    })
+    .replace(/&#(\d+);/g, (match, dec: string) => {
+      const codePoint = parseInt(dec, 10);
+
+      return codePoint > 0 && codePoint <= 0x10FFFF
+        ? String.fromCodePoint(codePoint)
+        : match;
+    });
 }
 
 function isStandaloneUrl(value: string): boolean {
@@ -842,8 +974,37 @@ function isStandaloneUrl(value: string): boolean {
   }
 }
 
-function createBrazeTranslationTag(entryId: string): string {
-  return `{{content_blocks.$\{${entryId}}}}`;
+function shouldKeepLiquidTagWithinTranslation(liquidTag: string): boolean {
+  const liquidTagName = getLiquidTagName(liquidTag);
+
+  if (liquidTagName === null) {
+    return false;
+  }
+
+  return INLINE_LIQUID_TAG_NAMES.has(liquidTagName);
+}
+
+function getLiquidTagName(liquidTag: string): string | null {
+  const normalizedTagBody = liquidTag
+    .slice(2, -2)
+    .trim()
+    .replace(/^[-\s]+|[-\s]+$/g, "");
+
+  if (normalizedTagBody.length === 0) {
+    return null;
+  }
+
+  const liquidTagName = normalizedTagBody
+    .split(/\s+/, 1)[0]
+    ?.toLowerCase();
+
+  return liquidTagName === undefined || liquidTagName.length === 0
+    ? null
+    : liquidTagName;
+}
+
+function createTranslationBlock(entryId: string, sourceText: string): string {
+  return `{% translation ${entryId} %}${sourceText}{% endtranslation %}`;
 }
 
 function createChecksum(value: string): string {

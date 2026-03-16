@@ -2,13 +2,24 @@ export { buildBackendApp, type BackendAppOptions } from "./app.js";
 export {
   createDefaultProviders,
   type BackendProviders,
+  type BrazeTemplateClient,
   type BrazeSyncProvider,
+  type CsvProvider,
+  LocalCsvProvider,
   LocalTransformProvider,
   MockBrazeSyncProvider,
   MockTranslationProvider,
   type ProviderContext,
+  type TemplateTranslationProvider,
+  TemplateTranslationWorkflowProvider,
+  BrazeRestTemplateClient,
+  TodoBrazeTemplateClient,
   type TransformProvider,
-  type TranslationProvider
+  type TranslationProvider,
+  detectMissingTemplateTranslations,
+  mergeTemplateTranslations,
+  normalizeBrazeTemplateEntries,
+  summarizeTemplateTranslateRun
 } from "./providers.js";
 export {
   OpenAITranslationProvider,
