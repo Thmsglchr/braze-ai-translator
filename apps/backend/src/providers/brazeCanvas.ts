@@ -19,6 +19,7 @@ export interface CanvasStep {
 }
 
 export interface CanvasDetailsResponse {
+  readonly workflowId: string;
   readonly name: string;
   readonly description: string;
   readonly draft: boolean;
@@ -174,8 +175,20 @@ function parseCanvasDetailsResponse(
   body: Record<string, unknown>
 ): CanvasDetailsResponse {
   const steps = Array.isArray(body.steps) ? body.steps : [];
+  const workflowId =
+    firstNonBlankString([
+      body.workflow_id,
+      body.workflowId,
+      body.canvas_id,
+      body.canvasId,
+      body.api_id,
+      body.apiId,
+      body.uuid,
+      body.id
+    ]) ?? "";
 
   return {
+    workflowId,
     name: typeof body.name === "string" ? body.name : "",
     description: typeof body.description === "string" ? body.description : "",
     draft: body.draft === true,
@@ -244,4 +257,19 @@ function parseStepTranslationEntry(raw: unknown): StepTranslationEntry {
         typeof locale?.locale_key === "string" ? locale.locale_key : ""
     }
   };
+}
+
+function firstNonBlankString(values: readonly unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const normalized = value.trim();
+    if (normalized.length > 0) {
+      return normalized;
+    }
+  }
+
+  return null;
 }

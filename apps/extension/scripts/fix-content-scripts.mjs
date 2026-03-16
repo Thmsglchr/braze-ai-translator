@@ -7,7 +7,8 @@ const contentScriptPaths = [
   "dist/adapters/brazeAdapterShared.js",
   "dist/adapters/genericPageAdapter.js",
   "dist/adapters/brazePageAdapter.js",
-  "dist/contentScript.js"
+  "dist/contentScript.js",
+  "dist/monacoPageBridge.js"
 ];
 
 await Promise.all(

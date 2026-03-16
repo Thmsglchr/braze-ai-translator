@@ -10,12 +10,18 @@ import {
   type CanvasTranslateHeaders,
   type CanvasTranslateHttpResponse
 } from "./backendClient.js";
+import {
+  getWrapTranslationContextMenuCreateProperties,
+  shouldRetryWrapTranslationMessage
+} from "./backgroundShared.js";
 
 const RUN_TRANSFORM_MESSAGE_TYPE = "braze-ai-translator/run-transform";
 const TRANSLATE_CANVAS_MESSAGE_TYPE =
   "braze-ai-translator/translate-canvas";
 const WRAP_TRANSLATION_TAG_MESSAGE_TYPE =
   "braze-ai-translator/wrap-translation-tag";
+const TOGGLE_SETTINGS_PANEL_MESSAGE_TYPE =
+  "braze-ai-translator/toggle-settings-panel";
 
 interface TransformRequestMessage {
   readonly type: typeof RUN_TRANSFORM_MESSAGE_TYPE;
@@ -52,6 +58,7 @@ type BackgroundMessageResponse =
 interface ChromeRuntimeMessageSender {}
 
 interface ChromeContextMenusLike {
+  removeAll(callback?: () => void): void;
   create(
     properties: Record<string, unknown>,
     callback?: () => void
@@ -59,7 +66,11 @@ interface ChromeContextMenusLike {
   readonly onClicked: {
     addListener(
       callback: (
-        info: { readonly menuItemId: string | number; readonly selectionText?: string },
+        info: {
+          readonly menuItemId: string | number;
+          readonly selectionText?: string;
+          readonly frameId?: number;
+        },
         tab?: { readonly id?: number }
       ) => void
     ): void;
@@ -70,8 +81,15 @@ interface ChromeTabsLike {
   sendMessage(
     tabId: number,
     message: unknown,
+    options?: { readonly frameId?: number },
     callback?: (response: unknown) => void
   ): void;
+}
+
+interface ChromeActionLike {
+  readonly onClicked?: {
+    addListener(callback: (tab: { readonly id?: number }) => void): void;
+  };
 }
 
 interface ChromeRuntimeLike {
@@ -88,25 +106,30 @@ interface ChromeRuntimeLike {
     readonly onInstalled?: {
       addListener(callback: () => void): void;
     };
+    readonly lastError?: {
+      readonly message?: string;
+    };
   };
   readonly contextMenus?: ChromeContextMenusLike;
   readonly tabs?: ChromeTabsLike;
+  readonly action?: ChromeActionLike;
 }
 
 const extensionChrome = getExtensionChrome();
 
 if (extensionChrome !== undefined) {
-  extensionChrome.runtime.onInstalled?.addListener(() => {
-    extensionChrome.contextMenus?.create({
-      id: "braze-wrap-translation-tag",
-      title: "Wrap in translation tag",
-      contexts: ["selection"],
-      documentUrlPatterns: [
-        "*://*.braze.com/*",
-        "*://*.appboy.com/*",
-        "*://*.braze.eu/*"
-      ]
+  const installContextMenu = (): void => {
+    extensionChrome.contextMenus?.removeAll(() => {
+      extensionChrome.contextMenus?.create(
+        getWrapTranslationContextMenuCreateProperties()
+      );
     });
+  };
+
+  installContextMenu();
+
+  extensionChrome.runtime.onInstalled?.addListener(() => {
+    installContextMenu();
   });
 
   extensionChrome.contextMenus?.onClicked.addListener((info, tab) => {
@@ -114,11 +137,42 @@ if (extensionChrome !== undefined) {
       info.menuItemId === "braze-wrap-translation-tag" &&
       tab?.id !== undefined
     ) {
-      extensionChrome.tabs?.sendMessage(tab.id, {
+      const message = {
         type: WRAP_TRANSLATION_TAG_MESSAGE_TYPE,
         selectionText: info.selectionText ?? ""
-      });
+      };
+
+      if (info.frameId === undefined) {
+        extensionChrome.tabs?.sendMessage(tab.id, message);
+        return;
+      }
+
+      extensionChrome.tabs?.sendMessage(
+        tab.id,
+        message,
+        { frameId: info.frameId },
+        (response) => {
+          if (
+            shouldRetryWrapTranslationMessage(
+              extensionChrome.runtime.lastError?.message,
+              response
+            )
+          ) {
+            extensionChrome.tabs?.sendMessage(tab.id!, message);
+          }
+        }
+      );
     }
+  });
+
+  extensionChrome.action?.onClicked?.addListener((tab) => {
+    if (tab.id === undefined) {
+      return;
+    }
+
+    extensionChrome.tabs?.sendMessage(tab.id, {
+      type: TOGGLE_SETTINGS_PANEL_MESSAGE_TYPE
+    });
   });
 
   extensionChrome.runtime.onMessage.addListener(

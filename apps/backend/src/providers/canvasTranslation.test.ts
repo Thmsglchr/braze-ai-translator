@@ -35,6 +35,9 @@ class StubTranslationProvider implements TranslationProvider {
 }
 
 class StubBrazeCanvasClient {
+  readonly detailsCalls: string[] = [];
+  readonly getStepTranslationsCalls: string[] = [];
+  readonly getStepSourceTranslationsCalls: string[] = [];
   readonly putCalls: Array<{
     readonly workflowId: string;
     readonly stepId: string;
@@ -44,7 +47,9 @@ class StubBrazeCanvasClient {
   }> = [];
 
   async getCanvasDetails(_canvasId: string): Promise<CanvasDetailsResponse> {
+    this.detailsCalls.push(_canvasId);
     return {
+      workflowId: "4af78996-57ac-4ff2-8e0f-0b597a55d46f",
       name: "Lifecycle Canvas",
       description: "",
       draft: false,
@@ -73,6 +78,7 @@ class StubBrazeCanvasClient {
     _stepId: string,
     _messageVariationId: string
   ): Promise<StepTranslationsResponse> {
+    this.getStepTranslationsCalls.push(_workflowId);
     return {
       translations: [
         {
@@ -94,6 +100,7 @@ class StubBrazeCanvasClient {
     _stepId: string,
     _messageVariationId: string
   ): Promise<Record<string, string>> {
+    this.getStepSourceTranslationsCalls.push(_workflowId);
     return {
       item_1: "Hello friend"
     };
@@ -127,9 +134,16 @@ describe("CanvasTranslationWorkflowProvider", () => {
       sourceLocale: "fr-FR"
     });
 
-    const result = await provider.translateCanvas("canvas.welcome");
+    const result = await provider.translateCanvas("69b7a1daa603f5008d7b7d05");
 
     expect(result.resultStatus).toBe("success");
+    expect(canvasClient.detailsCalls).toEqual(["69b7a1daa603f5008d7b7d05"]);
+    expect(canvasClient.getStepSourceTranslationsCalls).toEqual([
+      "4af78996-57ac-4ff2-8e0f-0b597a55d46f"
+    ]);
+    expect(canvasClient.getStepTranslationsCalls).toEqual([
+      "4af78996-57ac-4ff2-8e0f-0b597a55d46f"
+    ]);
     expect(translationProvider.requests).toHaveLength(1);
     expect(translationProvider.requests[0]?.sourceLocale).toBe("fr-FR");
     expect(translationProvider.requests[0]?.targetLocales).toEqual(["fr-FR"]);
@@ -137,6 +151,9 @@ describe("CanvasTranslationWorkflowProvider", () => {
       "fr-FR"
     );
     expect(canvasClient.putCalls).toHaveLength(1);
+    expect(canvasClient.putCalls[0]?.workflowId).toBe(
+      "4af78996-57ac-4ff2-8e0f-0b597a55d46f"
+    );
     expect(canvasClient.putCalls[0]?.localeId).toBe("locale.uuid.fr");
     expect(canvasClient.putCalls[0]?.translationMap).toEqual({
       item_1: "translated:Hello friend"

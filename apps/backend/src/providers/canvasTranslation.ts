@@ -43,6 +43,7 @@ export class CanvasTranslationWorkflowProvider
 
   async translateCanvas(canvasId: string): Promise<CanvasTranslateResponse> {
     const details = await this.canvasClient.getCanvasDetails(canvasId);
+    const workflowId = details.workflowId || canvasId;
     const stepResults: CanvasStepResult[] = [];
     const globalErrors: string[] = [];
     let totalTranslationsPushed = 0;
@@ -50,7 +51,7 @@ export class CanvasTranslationWorkflowProvider
     for (const step of details.steps) {
       for (const message of step.messages) {
         const result = await this.translateStepMessage(
-          canvasId,
+          workflowId,
           step,
           message
         );
@@ -97,7 +98,7 @@ export class CanvasTranslationWorkflowProvider
   }
 
   private async translateStepMessage(
-    canvasId: string,
+    workflowId: string,
     step: CanvasStep,
     message: CanvasMessageVariation
   ): Promise<CanvasStepResult> {
@@ -113,7 +114,7 @@ export class CanvasTranslationWorkflowProvider
 
     try {
       const sourceMap = await this.canvasClient.getStepSourceTranslations(
-        canvasId,
+        workflowId,
         step.stepId,
         message.messageVariationId
       );
@@ -130,7 +131,7 @@ export class CanvasTranslationWorkflowProvider
 
       const translationsResponse =
         await this.canvasClient.getStepTranslations(
-          canvasId,
+          workflowId,
           step.stepId,
           message.messageVariationId
         );
@@ -167,7 +168,7 @@ export class CanvasTranslationWorkflowProvider
           );
 
           await this.canvasClient.putStepTranslation(
-            canvasId,
+            workflowId,
             step.stepId,
             message.messageVariationId,
             locale.uuid,

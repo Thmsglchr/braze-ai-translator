@@ -117,6 +117,13 @@ translation runs stay server-side behind `TemplateTranslationRequest` and
 - The settings panel now stores a configurable source locale for canvas
   translation requests. Use the locale code Braze/OpenAI should treat as the
   source language, for example `en`, `en-US`, or `fr-FR`.
+- Clicking the Chrome toolbar icon on a Braze page now toggles the in-page
+  settings panel, so you do not have to rely on the bottom-left gear button.
+- The tag inserter now runs in Braze subframes as well, so right-click wrapping
+  can target editors that live inside same-origin iframe or `srcdoc` surfaces.
+- The right-click wrapper is now also registered for iframe-backed Bee
+  drag-and-drop editors, including `about:blank`/`srcdoc` frame documents such
+  as `dnd-editor-container__bee-plugin-frame`.
 - The `Translate Canvas` button now distinguishes complete, partial, and failed
   backend runs instead of treating every HTTP 200 response as success.
 
