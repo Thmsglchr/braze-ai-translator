@@ -196,6 +196,29 @@ async function storeSettings(settings: StoredSettings): Promise<void> {
   }
 }
 
+function parseCanvasNameFromTitle(): string | null {
+  const titleElement = document.querySelector("title");
+  if (!titleElement) {
+    return null;
+  }
+
+  const titleText = titleElement.textContent ?? "";
+
+  // Pattern: "... Edit 'Canvas Name'" or "... Edit 'Canvas Name' ..."
+  const editQuoteMatch = titleText.match(/Edit\s+'([^']+)'/i);
+  if (editQuoteMatch?.[1]) {
+    return editQuoteMatch[1].trim();
+  }
+
+  // Fallback: "... Edit \"Canvas Name\""
+  const editDoubleQuoteMatch = titleText.match(/Edit\s+"([^"]+)"/i);
+  if (editDoubleQuoteMatch?.[1]) {
+    return editDoubleQuoteMatch[1].trim();
+  }
+
+  return null;
+}
+
 let cachedCanvasId: string | null | undefined;
 
 function parseCanvasIdFromPage(): string | null {
@@ -692,32 +715,6 @@ function showTagIdModal(selectedText: string): void {
     gap: "18px"
   });
 
-  const iconShell = document.createElement("div");
-  Object.assign(iconShell.style, {
-    width: "56px",
-    height: "56px",
-    borderRadius: "999px",
-    background: BRAZE_PURPLE_SURFACE,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: BRAZE_PURPLE,
-    flexShrink: "0"
-  });
-  const modalIconImage = createExtensionIconImage(28);
-  if (modalIconImage) {
-    iconShell.appendChild(modalIconImage);
-  } else {
-    iconShell.appendChild(
-      createToastIcon(
-        "M256 0c14.7 0 28.2 8.1 35.1 21.1l216 400c6.6 12.2 6.3 26.9-.8 38.9S487.8 480 473.9 480H38.1c-13.9 0-26.8-7.4-33.4-19.5s-6.9-26.8-.8-38.9l216-400C227.8 8.1 241.3 0 256 0zm0 352a40 40 0 1 0 0 80 40 40 0 1 0 0-80zm-24-224 8 160c.7 13.2 11.6 24 24 24s23.3-10.8 24-24l8-160c.8-14.2-10.5-26-24.8-26h-14.4c-14.3 0-25.6 11.8-24.8 26z",
-        "0 0 512 512",
-        "20",
-        BRAZE_PURPLE
-      )
-    );
-  }
-
   const titleBlock = document.createElement("div");
   const title = document.createElement("div");
   title.textContent = "Wrap in translation tag";
@@ -739,7 +736,6 @@ function showTagIdModal(selectedText: string): void {
   });
   titleBlock.appendChild(title);
   titleBlock.appendChild(subtitle);
-  header.appendChild(iconShell);
   header.appendChild(titleBlock);
 
   const previewCard = document.createElement("div");
@@ -1433,8 +1429,8 @@ function writeTranslationTagToEditableRange(
     selection.addRange(target.range);
 
     if (document.queryCommandSupported?.("insertText")) {
-      const inserted = document.execCommand("insertText", false, tagged);
-      if (inserted && target.editableElement.innerHTML !== htmlBefore) {
+      document.execCommand("insertText", false, tagged);
+      if (target.editableElement.innerHTML !== htmlBefore) {
         dispatchEditorChangeEvents(target.editableElement, tagged);
         return true;
       }
@@ -1800,7 +1796,7 @@ function tryInjectTranslateButton(): void {
   btn.setAttribute("data-loading-state", "idle");
   btn.className = testButton.className;
   btn.type = "button";
-  btn.innerHTML = `<span class="${getButtonContentClass(testButton)}"><span class="${getButtonIconClass(testButton)}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512" width="18" height="18" fill="currentColor"><path d="M0 128C0 92.7 28.7 64 64 64l192 0 48 0 16 0 256 0c35.3 0 64 28.7 64 64l0 256c0 35.3-28.7 64-64 64l-256 0-16 0-48 0L64 448c-35.3 0-64-28.7-64-64L0 128zm320 0l0 256 256 0 0-256-256 0zM178.3 175.9c-3.2-7.2-10.4-11.9-18.3-11.9s-15.1 4.7-18.3 11.9l-64 144c-4.5 10.1 .1 21.9 10.2 26.4s21.9-.1 26.4-10.2l8.9-20.1 73.6 0 8.9 20.1c4.5 10.1 16.3 14.6 26.4 10.2s14.6-16.3 10.2-26.4l-64-144zM160 233.2L179 276l-38 0 19-42.8zM448 164c11 0 20 9 20 20l0 4 44 0c11 0 20 9 20 20s-9 20-20 20l-2 0-1.6 4.5c-8.9 24.4-22.8 46.7-41.2 65.7l-1 1.1 9.9 9.9c7.8 7.8 7.8 20.5 0 28.3s-20.5 7.8-28.3 0l-13.1-13.1c-4.3 3.2-8.8 6.2-13.4 8.9l-.2 .1c-9.6 5.5-21.8 2.2-27.3-7.4s-2.2-21.8 7.4-27.3l.2-.1c2.4-1.4 4.7-2.9 6.9-4.5l-8.2-8.2c-7.8-7.8-7.8-20.5 0-28.3s20.5-7.8 28.3 0l6.3 6.3c7.4-10.4 13.2-22 17.1-34.4l-65.5 0c-11 0-20-9-20-20s9-20 20-20l44 0 0-4c0-11 9-20 20-20z"/></svg></span><span>Translate Canvas</span></span>`;
+  btn.innerHTML = `<span class="${getButtonContentClass(testButton)}"><span class="${getButtonIconClass(testButton)}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M359.9 0C393 0 420 27 420 60.1l0 15.8 22.7-22.6c12.5-12.5 32.8-12.5 45.3 0s12.5 32.8 0 45.3L420 166.6l0 15.3c0 33.1-27 60.1-60.1 60.1l-75.8 0c-33.1 0-60.1-27-60.1-60.1l0-121.8C224 27 251 0 284.1 0l75.8 0zM152.1 270l75.8 0c33.1 0 60.1 27 60.1 60.1l0 121.8c0 33.1-27 60.1-60.1 60.1l-75.8 0C119 512 92 485 92 451.9l0-15.8-22.6 22.6c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L92 345.4l0-15.3C92 297 119 270 152.1 270zM128 345.9l0 106c0 13.3 10.8 24.1 24.1 24.1l75.8 0c13.3 0 24.1-10.8 24.1-24.1l0-121.8c0-13.3-10.8-24.1-24.1-24.1l-75.8 0c-13.3 0-24.1 10.8-24.1 24.1l0 15.8zm132-164c0 13.3 10.8 24.1 24.1 24.1l75.8 0c13.3 0 24.1-10.8 24.1-24.1l0-121.8c0-13.3-10.8-24.1-24.1-24.1l-75.8 0C270.8 36 260 46.8 260 60.1l0 121.8z"/></svg></span><span>Translate Canvas</span></span>`;
 
   btn.addEventListener("click", () => {
     void handleTranslateCanvasClick(canvasId, btn);
@@ -1890,26 +1886,34 @@ async function handleTranslateCanvasClick(
       openaiApiKey: settings.openaiApiKey || undefined,
       brazeSourceLocale: settings.brazeSourceLocale || undefined
     };
-    let effectiveCanvasId =
-      canvasId && canvasId.length > 0
-        ? canvasId
-        : await promptForCanvasApiId(undefined);
 
-    if (!effectiveCanvasId) {
-      progressModal.close();
-      showToast("Canvas translation cancelled.", "info");
-      return;
+    const canvasName = parseCanvasNameFromTitle();
+    let effectiveCanvasId: string | undefined =
+      canvasId && canvasId.length > 0 ? canvasId : undefined;
+
+    // If we have either an ID from the URL or a name from the <title>, try
+    // the backend directly -- it will resolve name -> ID via /canvas/list
+    // when only the name is provided.
+    if (!effectiveCanvasId && !canvasName) {
+      effectiveCanvasId = (await promptForCanvasApiId(undefined)) ?? undefined;
+      if (!effectiveCanvasId) {
+        progressModal.close();
+        showToast("Canvas translation cancelled.", "info");
+        return;
+      }
     }
 
     let result = await requestCanvasTranslate(
       settings.backendBaseUrl,
       effectiveCanvasId,
-      requestHeaders
+      requestHeaders,
+      canvasName ?? undefined
     );
 
     if (
       !result.ok &&
-      isCanvasApiIdentifierErrorMessage(result.message)
+      (isCanvasApiIdentifierErrorMessage(result.message) ||
+        isCanvasNotFoundByNameMessage(result.message))
     ) {
       const manualCanvasId = await promptForCanvasApiId(effectiveCanvasId);
       if (!manualCanvasId) {
@@ -2246,13 +2250,14 @@ function showCanvasTranslateProgressModal(): { readonly close: () => void } {
 
 async function requestCanvasTranslate(
   backendBaseUrl: string,
-  canvasId: string,
+  canvasId: string | undefined,
   headers: {
     readonly brazeRestApiUrl: string;
     readonly brazeApiKey: string;
     readonly openaiApiKey?: string;
     readonly brazeSourceLocale?: string;
-  }
+  },
+  canvasName?: string
 ): Promise<CanvasTranslateResultMessage> {
   if (extensionChrome === undefined) {
     return { ok: false, message: "Chrome extension runtime is unavailable." };
@@ -2265,6 +2270,7 @@ async function requestCanvasTranslate(
           type: TRANSLATE_CANVAS_MESSAGE_TYPE,
           backendBaseUrl,
           canvasId,
+          canvasName,
           headers
         },
         (response) => {

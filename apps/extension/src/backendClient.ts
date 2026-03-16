@@ -330,14 +330,20 @@ export type CanvasTranslateHttpResponse =
 
 export async function postCanvasTranslate(
   backendBaseUrl: string,
-  canvasId: string,
+  canvasId: string | undefined,
   headers: CanvasTranslateHeaders,
+  canvasNameOrFetchFn?: string | typeof fetch,
   fetchFn: typeof fetch = fetch
 ): Promise<CanvasTranslateHttpResponse> {
   const requestUrl = new URL(
     "/canvas/translate",
     normalizeBaseUrl(backendBaseUrl)
   );
+
+  const canvasName =
+    typeof canvasNameOrFetchFn === "string" ? canvasNameOrFetchFn : undefined;
+  const effectiveFetchFn =
+    typeof canvasNameOrFetchFn === "function" ? canvasNameOrFetchFn : fetchFn;
 
   const requestHeaders: Record<string, string> = {
     "Content-Type": "application/json",
@@ -353,10 +359,18 @@ export async function postCanvasTranslate(
     requestHeaders["X-Braze-Source-Locale"] = headers.brazeSourceLocale;
   }
 
-  const response = await fetchFn(requestUrl.toString(), {
+  const body: Record<string, string> = {};
+  if (canvasId) {
+    body.canvasId = canvasId;
+  }
+  if (canvasName) {
+    body.canvasName = canvasName;
+  }
+
+  const response = await effectiveFetchFn(requestUrl.toString(), {
     method: "POST",
     headers: requestHeaders,
-    body: JSON.stringify({ canvasId })
+    body: JSON.stringify(body)
   });
   const responseBody = await parseJsonResponse(response);
 
