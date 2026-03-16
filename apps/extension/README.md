@@ -1,7 +1,7 @@
 # Extension MVP
 
 Chrome extension MVP for exercising the local localization pipeline and a Braze
-editor write-back POC.
+editor write-back POC, plus the canvas translation workflow helper.
 
 ## What It Does
 
@@ -114,6 +114,11 @@ translation runs stay server-side behind `TemplateTranslationRequest` and
 - Browser automation is not added yet. Use the generic demo page, the
   Braze-like demo fixture, and optionally a real Braze editor page for manual
   verification.
+- The settings panel now stores a configurable source locale for canvas
+  translation requests. Use the locale code Braze/OpenAI should treat as the
+  source language, for example `en`, `en-US`, or `fr-FR`.
+- The `Translate Canvas` button now distinguishes complete, partial, and failed
+  backend runs instead of treating every HTTP 200 response as success.
 
 ## Manual Braze Verification
 

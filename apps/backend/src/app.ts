@@ -143,6 +143,7 @@ export function buildBackendApp(
     >;
     const brazeApiKey = getHeader(headers, "x-braze-api-key");
     const brazeRestApiUrl = getHeader(headers, "x-braze-rest-api-url");
+    const brazeSourceLocale = getHeader(headers, "x-braze-source-locale");
     const openaiApiKey = getHeader(headers, "x-openai-api-key");
 
     if (brazeApiKey === undefined || brazeRestApiUrl === undefined) {
@@ -173,7 +174,8 @@ export function buildBackendApp(
     const canvasWorkflow = new CanvasTranslationWorkflowProvider({
       now,
       translationProvider: translationProv,
-      canvasClient
+      canvasClient,
+      sourceLocale: brazeSourceLocale
     });
 
     return executeRoute<CanvasTranslateResponse>(

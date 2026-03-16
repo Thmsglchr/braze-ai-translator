@@ -117,20 +117,25 @@ class StubBrazeCanvasClient {
 }
 
 describe("CanvasTranslationWorkflowProvider", () => {
-  it("uses Braze locale keys rather than display names when translating", async () => {
+  it("uses the configured source locale and Braze locale keys when translating", async () => {
     const translationProvider = new StubTranslationProvider();
     const canvasClient = new StubBrazeCanvasClient();
     const provider = new CanvasTranslationWorkflowProvider({
       now: () => fixedNow,
       translationProvider,
-      canvasClient: canvasClient as unknown as BrazeCanvasClient
+      canvasClient: canvasClient as unknown as BrazeCanvasClient,
+      sourceLocale: "fr-FR"
     });
 
     const result = await provider.translateCanvas("canvas.welcome");
 
     expect(result.resultStatus).toBe("success");
     expect(translationProvider.requests).toHaveLength(1);
+    expect(translationProvider.requests[0]?.sourceLocale).toBe("fr-FR");
     expect(translationProvider.requests[0]?.targetLocales).toEqual(["fr-FR"]);
+    expect(translationProvider.requests[0]?.entries[0]?.sourceLocale).toBe(
+      "fr-FR"
+    );
     expect(canvasClient.putCalls).toHaveLength(1);
     expect(canvasClient.putCalls[0]?.localeId).toBe("locale.uuid.fr");
     expect(canvasClient.putCalls[0]?.translationMap).toEqual({

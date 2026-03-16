@@ -71,6 +71,24 @@ thin public API contract for the same flow.
   - push updated translations through the Braze template client boundary
   - return summary counts for new translations, skipped work, and errors
 
+### `POST /canvas/translate`
+
+- request schema: `CanvasTranslateRequestSchema`
+- response schema: `CanvasTranslateResponseSchema`
+- required headers:
+  - `X-Braze-Api-Key`
+  - `X-Braze-Rest-Api-Url`
+- optional headers:
+  - `X-OpenAI-Api-Key`
+  - `X-Braze-Source-Locale`
+- responsibility:
+  - fetch the canvas structure and message variations from Braze
+  - read source translation tags and configured locales for each step/message
+  - translate source entries into each target locale
+  - push translations back to Braze per step/message/locale
+  - return `success`, `partial`, or `failed` at the canvas level with
+    step-level errors preserved in the response
+
 ### `POST /translate`
 
 - request schema: `TranslationRequestSchema`

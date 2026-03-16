@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ExtractedContentPayload, TransformResult } from "@braze-ai-translator/schemas";
 
-import { postTransform } from "./backendClient.js";
+import { postCanvasTranslate, postTransform } from "./backendClient.js";
 
 function createPayload(): ExtractedContentPayload {
   return {
@@ -81,5 +81,52 @@ describe("postTransform", () => {
     expect(response.ok).toBe(false);
     expect(response.statusCode).toBe(400);
     expect(response.apiError?.errorCode).toBe("invalid_request");
+  });
+});
+
+describe("postCanvasTranslate", () => {
+  it("forwards Braze source locale when present", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          canvasId: "canvas.welcome",
+          canvasName: "Welcome Canvas",
+          resultStatus: "success",
+          stepsProcessed: 1,
+          totalTranslationsPushed: 2,
+          stepResults: [],
+          errors: [],
+          completedAt: "2026-03-16T07:30:00.000Z"
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        }
+      )
+    );
+
+    const response = await postCanvasTranslate(
+      "http://127.0.0.1:8787",
+      "canvas.welcome",
+      {
+        brazeRestApiUrl: "https://rest.fra-01.braze.eu",
+        brazeApiKey: "braze-key",
+        brazeSourceLocale: "fr-FR"
+      },
+      fetchFn
+    );
+
+    expect(response.ok).toBe(true);
+    expect(fetchFn).toHaveBeenCalledWith(
+      "http://127.0.0.1:8787/canvas/translate",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-Braze-Source-Locale": "fr-FR"
+        })
+      })
+    );
   });
 });

@@ -19,6 +19,7 @@ export interface CanvasTranslationWorkflowOptions {
   readonly now: () => string;
   readonly translationProvider: TranslationProvider;
   readonly canvasClient: BrazeCanvasClient;
+  readonly sourceLocale?: string;
 }
 
 export interface CanvasTranslationProvider {
@@ -31,11 +32,13 @@ export class CanvasTranslationWorkflowProvider
   private readonly now: () => string;
   private readonly translationProvider: TranslationProvider;
   private readonly canvasClient: BrazeCanvasClient;
+  private readonly sourceLocale: string;
 
   constructor(options: CanvasTranslationWorkflowOptions) {
     this.now = options.now;
     this.translationProvider = options.translationProvider;
     this.canvasClient = options.canvasClient;
+    this.sourceLocale = options.sourceLocale ?? "en";
   }
 
   async translateCanvas(canvasId: string): Promise<CanvasTranslateResponse> {
@@ -146,7 +149,11 @@ export class CanvasTranslationWorkflowProvider
         };
       }
 
-      const entries = buildTranslationEntries(sourceMap, message.channel);
+      const entries = buildTranslationEntries(
+        sourceMap,
+        message.channel,
+        this.sourceLocale
+      );
       const localesTranslated: string[] = [];
       let translationsPushed = 0;
       const errors: string[] = [];
@@ -213,7 +220,7 @@ export class CanvasTranslationWorkflowProvider
     const request: TranslationRequest = {
       requestId,
       extractionId: requestId,
-      sourceLocale: "en",
+      sourceLocale: this.sourceLocale,
       targetLocales: [targetLocale],
       entries: [...entries],
       requestedAt: this.now()
@@ -236,12 +243,13 @@ export class CanvasTranslationWorkflowProvider
 
 function buildTranslationEntries(
   sourceMap: Record<string, string>,
-  channel: string
+  channel: string,
+  sourceLocale: string
 ): TranslationEntry[] {
   return Object.entries(sourceMap).map(([tagId, sourceText]) => ({
     entryId: tagId,
     extractionId: `canvas-extract-${tagId}`,
-    sourceLocale: "en",
+    sourceLocale,
     messageChannel: normalizeChannel(channel),
     contentFieldKey: "body",
     contentFieldType: "plain_text" as const,

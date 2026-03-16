@@ -309,6 +309,7 @@ export interface CanvasTranslateHeaders {
   readonly brazeRestApiUrl: string;
   readonly brazeApiKey: string;
   readonly openaiApiKey?: string;
+  readonly brazeSourceLocale?: string;
 }
 
 export interface CanvasTranslateSuccessResponse {
@@ -346,6 +347,10 @@ export async function postCanvasTranslate(
 
   if (headers.openaiApiKey) {
     requestHeaders["X-OpenAI-Api-Key"] = headers.openaiApiKey;
+  }
+
+  if (headers.brazeSourceLocale) {
+    requestHeaders["X-Braze-Source-Locale"] = headers.brazeSourceLocale;
   }
 
   const response = await fetchFn(requestUrl.toString(), {

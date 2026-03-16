@@ -1,7 +1,10 @@
 type ApiErrorResponse =
   import("@braze-ai-translator/schemas").ApiErrorResponse;
+type CanvasTranslateResponse =
+  import("@braze-ai-translator/schemas").CanvasTranslateResponse;
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8787";
+const DEFAULT_SOURCE_LOCALE = "en";
 
 const BRAZE_REST_ENDPOINTS: readonly {
   readonly label: string;
@@ -26,7 +29,7 @@ const WRAP_TRANSLATION_TAG_MESSAGE_TYPE =
 
 interface CanvasTranslateResultMessage {
   readonly ok: boolean;
-  readonly result?: Record<string, unknown>;
+  readonly result?: CanvasTranslateResponse;
   readonly message?: string;
 }
 
@@ -35,7 +38,25 @@ interface StoredSettings {
   readonly brazeRestApiUrl: string;
   readonly brazeApiKey: string;
   readonly openaiApiKey: string;
+  readonly brazeSourceLocale: string;
 }
+
+type TagInsertionTarget =
+  | {
+      readonly kind: "form_control";
+      readonly element: HTMLInputElement | HTMLTextAreaElement;
+      readonly selectionStart: number;
+      readonly selectionEnd: number;
+      readonly selectedText: string;
+    }
+  | {
+      readonly kind: "contenteditable";
+      readonly editableElement: HTMLElement;
+      readonly range: Range;
+      readonly selectedText: string;
+    };
+
+type ToastType = "success" | "error" | "info" | "warning";
 
 interface ChromeStorageAreaLike {
   get(
@@ -75,10 +96,12 @@ const SETTINGS_DEFAULTS: StoredSettings = {
   backendBaseUrl: DEFAULT_BACKEND_URL,
   brazeRestApiUrl: BRAZE_REST_ENDPOINTS[0]?.url ?? "",
   brazeApiKey: "",
-  openaiApiKey: ""
+  openaiApiKey: "",
+  brazeSourceLocale: DEFAULT_SOURCE_LOCALE
 };
 
 const extensionChrome = getExtensionChrome();
+let pendingTagInsertionTarget: TagInsertionTarget | null = null;
 
 function getExtensionChrome(): ChromeLike | undefined {
   return (globalThis as typeof globalThis & { chrome?: ChromeLike }).chrome;
@@ -110,7 +133,11 @@ async function loadStoredSettings(): Promise<StoredSettings> {
             openaiApiKey:
               typeof items.openaiApiKey === "string"
                 ? items.openaiApiKey
-                : SETTINGS_DEFAULTS.openaiApiKey
+                : SETTINGS_DEFAULTS.openaiApiKey,
+            brazeSourceLocale:
+              typeof items.brazeSourceLocale === "string"
+                ? items.brazeSourceLocale
+                : SETTINGS_DEFAULTS.brazeSourceLocale
           });
         }
       );
@@ -132,7 +159,8 @@ async function storeSettings(settings: StoredSettings): Promise<void> {
           backendBaseUrl: settings.backendBaseUrl,
           brazeRestApiUrl: settings.brazeRestApiUrl,
           brazeApiKey: settings.brazeApiKey,
-          openaiApiKey: settings.openaiApiKey
+          openaiApiKey: settings.openaiApiKey,
+          brazeSourceLocale: settings.brazeSourceLocale
         },
         () => resolve()
       );
@@ -176,13 +204,29 @@ function setupTagInserterListener(): void {
       if (!isRecord(message)) return;
       if (message.type !== WRAP_TRANSLATION_TAG_MESSAGE_TYPE) return;
 
-      const selectionText =
+      if (pendingTagInsertionTarget === null) {
+        pendingTagInsertionTarget = captureTagInsertionTarget();
+      }
+
+      const selectionTextFromMessage =
         typeof message.selectionText === "string"
           ? message.selectionText
           : "";
+      const selectionText =
+        pendingTagInsertionTarget?.selectedText ?? selectionTextFromMessage;
 
       showTagIdModal(selectionText);
     }
+  );
+}
+
+function setupTagInsertionTargetTracking(): void {
+  document.addEventListener(
+    "contextmenu",
+    () => {
+      pendingTagInsertionTarget = captureTagInsertionTarget();
+    },
+    true
   );
 }
 
@@ -240,6 +284,7 @@ function showTagIdModal(selectedText: string): void {
   input?.focus();
 
   const close = (): void => {
+    pendingTagInsertionTarget = null;
     backdrop.remove();
   };
 
@@ -280,39 +325,200 @@ function showTagIdModal(selectedText: string): void {
 }
 
 function insertTranslationTag(tagId: string, selectedText: string): void {
-  const tagged = `{% translation ${tagId} %} ${selectedText} {% endtranslation %}`;
+  const savedTarget = pendingTagInsertionTarget;
+  pendingTagInsertionTarget = null;
 
+  const exactSelectedText =
+    savedTarget?.selectedText.length && savedTarget.selectedText !== selectedText
+      ? savedTarget.selectedText
+      : selectedText;
+
+  if (exactSelectedText.length === 0) {
+    showToast(
+      "Select some text in the Braze editor before wrapping it in a translation tag.",
+      "error"
+    );
+    return;
+  }
+
+  const tagged = buildTranslationTag(tagId, exactSelectedText);
+
+  if (savedTarget !== null) {
+    const inserted =
+      savedTarget.kind === "form_control"
+        ? writeTranslationTagToFormControl(savedTarget, tagged)
+        : writeTranslationTagToEditableRange(savedTarget, tagged);
+
+    if (inserted) {
+      return;
+    }
+  }
+
+  const fallbackTarget = captureTagInsertionTarget();
+  if (fallbackTarget !== null) {
+    const inserted =
+      fallbackTarget.kind === "form_control"
+        ? writeTranslationTagToFormControl(fallbackTarget, tagged)
+        : writeTranslationTagToEditableRange(fallbackTarget, tagged);
+
+    if (inserted) {
+      return;
+    }
+  }
+
+  showToast(
+    "Could not restore the original Braze editor selection. Re-select the text and try again.",
+    "error"
+  );
+}
+
+function buildTranslationTag(tagId: string, selectedText: string): string {
+  return `{% translation ${tagId} %}${selectedText}{% endtranslation %}`;
+}
+
+function captureTagInsertionTarget(): TagInsertionTarget | null {
   const activeElement = document.activeElement;
 
   if (
     activeElement instanceof HTMLTextAreaElement ||
     activeElement instanceof HTMLInputElement
   ) {
-    const start = activeElement.selectionStart ?? 0;
-    const end = activeElement.selectionEnd ?? 0;
-    const value = activeElement.value;
+    const selectionStart = activeElement.selectionStart;
+    const selectionEnd = activeElement.selectionEnd;
 
-    activeElement.value =
-      value.slice(0, start) + tagged + value.slice(end);
-    activeElement.selectionStart = start;
-    activeElement.selectionEnd = start + tagged.length;
-    activeElement.dispatchEvent(new Event("input", { bubbles: true }));
-    activeElement.dispatchEvent(new Event("change", { bubbles: true }));
-    return;
-  }
-
-  if (document.queryCommandSupported?.("insertText")) {
-    document.execCommand("insertText", false, tagged);
-    return;
+    if (
+      selectionStart !== null &&
+      selectionEnd !== null &&
+      selectionEnd > selectionStart
+    ) {
+      return {
+        kind: "form_control",
+        element: activeElement,
+        selectionStart,
+        selectionEnd,
+        selectedText: activeElement.value.slice(selectionStart, selectionEnd)
+      };
+    }
   }
 
   const selection = window.getSelection();
-  if (selection && selection.rangeCount > 0) {
+
+  if (
+    selection === null ||
+    selection.rangeCount === 0 ||
+    selection.isCollapsed
+  ) {
+    return null;
+  }
+
+  const selectedText = selection.toString();
+  if (selectedText.length === 0) {
+    return null;
+  }
+
+  const range = selection.getRangeAt(0).cloneRange();
+  const editableElement = getEditableElement(range.commonAncestorContainer);
+
+  if (editableElement === null) {
+    return null;
+  }
+
+  return {
+    kind: "contenteditable",
+    editableElement,
+    range,
+    selectedText
+  };
+}
+
+function getEditableElement(node: Node): HTMLElement | null {
+  let current: HTMLElement | null =
+    node instanceof HTMLElement ? node : node.parentElement;
+
+  while (current !== null) {
+    if (current.isContentEditable) {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  return null;
+}
+
+function writeTranslationTagToFormControl(
+  target: Extract<TagInsertionTarget, { readonly kind: "form_control" }>,
+  tagged: string
+): boolean {
+  try {
+    target.element.focus();
+    target.element.setSelectionRange(
+      target.selectionStart,
+      target.selectionEnd
+    );
+
+    if (typeof target.element.setRangeText === "function") {
+      target.element.setRangeText(
+        tagged,
+        target.selectionStart,
+        target.selectionEnd,
+        "select"
+      );
+    } else {
+      const value = target.element.value;
+      target.element.value =
+        value.slice(0, target.selectionStart) +
+        tagged +
+        value.slice(target.selectionEnd);
+      target.element.selectionStart = target.selectionStart;
+      target.element.selectionEnd = target.selectionStart + tagged.length;
+    }
+
+    dispatchEditorChangeEvents(target.element);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function writeTranslationTagToEditableRange(
+  target: Extract<TagInsertionTarget, { readonly kind: "contenteditable" }>,
+  tagged: string
+): boolean {
+  const selection = window.getSelection();
+
+  if (selection === null) {
+    return false;
+  }
+
+  try {
+    target.editableElement.focus();
+    selection.removeAllRanges();
+    selection.addRange(target.range);
+
     const range = selection.getRangeAt(0);
     range.deleteContents();
-    range.insertNode(document.createTextNode(tagged));
-    selection.collapseToEnd();
+    const textNode = document.createTextNode(tagged);
+    range.insertNode(textNode);
+
+    const collapsedRange = document.createRange();
+    collapsedRange.setStartAfter(textNode);
+    collapsedRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(collapsedRange);
+
+    dispatchEditorChangeEvents(target.editableElement);
+    return true;
+  } catch {
+    return false;
   }
+}
+
+function dispatchEditorChangeEvents(
+  element: HTMLInputElement | HTMLTextAreaElement | HTMLElement
+): void {
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 // ---------------------------------------------------------------------------
@@ -399,18 +605,14 @@ async function handleTranslateCanvasClick(
       {
         brazeRestApiUrl: settings.brazeRestApiUrl,
         brazeApiKey: settings.brazeApiKey,
-        openaiApiKey: settings.openaiApiKey || undefined
+        openaiApiKey: settings.openaiApiKey || undefined,
+        brazeSourceLocale: settings.brazeSourceLocale || undefined
       }
     );
 
     if (result.ok && result.result) {
-      const r = result.result;
-      const pushed = r.totalTranslationsPushed ?? 0;
-      const steps = r.stepsProcessed ?? 0;
-      showToast(
-        `Translation complete: ${pushed} translations pushed across ${steps} step(s).`,
-        "success"
-      );
+      const notification = summarizeCanvasTranslateResult(result.result);
+      showToast(notification.message, notification.type);
     } else {
       showToast(
         result.message ?? "Canvas translation failed.",
@@ -433,6 +635,7 @@ async function requestCanvasTranslate(
     readonly brazeRestApiUrl: string;
     readonly brazeApiKey: string;
     readonly openaiApiKey?: string;
+    readonly brazeSourceLocale?: string;
   }
 ): Promise<CanvasTranslateResultMessage> {
   if (extensionChrome === undefined) {
@@ -563,11 +766,13 @@ async function renderSettingsPanel(): Promise<void> {
     </select>
     <label style="display:block;margin-bottom:4px;font-weight:500;font-size:12px">Braze API Key</label>
     <input data-setting="brazeApiKey" type="password" value="${escapeHtml(settings.brazeApiKey)}" placeholder="Braze REST API key" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:12px;margin-bottom:10px;box-sizing:border-box" />
-    <label style="display:block;margin-bottom:4px;font-weight:500;font-size:12px">OpenAI API Key</label>
-    <input data-setting="openaiApiKey" type="password" value="${escapeHtml(settings.openaiApiKey)}" placeholder="OpenAI API key (optional)" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:12px;margin-bottom:10px;box-sizing:border-box" />
-    <div style="text-align:right;margin-top:4px">
-      <button id="braze-ai-settings-save" style="padding:6px 16px;border:none;border-radius:4px;background:#2d7ff9;color:#fff;cursor:pointer;font-size:12px;font-weight:500">Save</button>
-    </div>
+	    <label style="display:block;margin-bottom:4px;font-weight:500;font-size:12px">OpenAI API Key</label>
+	    <input data-setting="openaiApiKey" type="password" value="${escapeHtml(settings.openaiApiKey)}" placeholder="OpenAI API key (optional)" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:12px;margin-bottom:10px;box-sizing:border-box" />
+	    <label style="display:block;margin-bottom:4px;font-weight:500;font-size:12px">Source Locale</label>
+	    <input data-setting="brazeSourceLocale" type="text" value="${escapeHtml(settings.brazeSourceLocale)}" placeholder="e.g. en, en-US, fr-FR" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:12px;margin-bottom:10px;box-sizing:border-box" />
+	    <div style="text-align:right;margin-top:4px">
+	      <button id="braze-ai-settings-save" style="padding:6px 16px;border:none;border-radius:4px;background:#2d7ff9;color:#fff;cursor:pointer;font-size:12px;font-weight:500">Save</button>
+	    </div>
   `;
 
   document.body.appendChild(panel);
@@ -589,7 +794,9 @@ async function renderSettingsPanel(): Promise<void> {
           BRAZE_REST_ENDPOINTS[0]?.url ||
           "",
         brazeApiKey: getValue("brazeApiKey"),
-        openaiApiKey: getValue("openaiApiKey")
+        openaiApiKey: getValue("openaiApiKey"),
+        brazeSourceLocale:
+          getValue("brazeSourceLocale") || DEFAULT_SOURCE_LOCALE
       });
 
       showToast("Settings saved.", "success");
@@ -604,7 +811,7 @@ async function renderSettingsPanel(): Promise<void> {
 
 function showToast(
   message: string,
-  type: "success" | "error" | "info" = "info"
+  type: ToastType = "info"
 ): void {
   const toast = document.createElement("div");
   const bgColor =
@@ -612,6 +819,8 @@ function showToast(
       ? "#38a169"
       : type === "error"
         ? "#e53e3e"
+        : type === "warning"
+          ? "#dd6b20"
         : "#2d7ff9";
 
   Object.assign(toast.style, {
@@ -648,6 +857,7 @@ function showToast(
 function bootstrap(): void {
   if (!isBrazePage()) return;
 
+  setupTagInsertionTargetTracking();
   setupTagInserterListener();
   injectSettingsGear();
 
@@ -661,6 +871,40 @@ function bootstrap(): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function summarizeCanvasTranslateResult(
+  result: CanvasTranslateResponse
+): { readonly message: string; readonly type: ToastType } {
+  const pushed = result.totalTranslationsPushed;
+  const steps = result.stepsProcessed;
+  const firstError =
+    result.errors[0] ??
+    result.stepResults.find((stepResult) => stepResult.errors.length > 0)
+      ?.errors[0];
+
+  if (result.resultStatus === "success") {
+    return {
+      message: `Translation complete: ${pushed} translations pushed across ${steps} step(s).`,
+      type: "success"
+    };
+  }
+
+  if (result.resultStatus === "partial") {
+    return {
+      message: firstError
+        ? `Translation partially complete: ${pushed} translations pushed across ${steps} step(s). First error: ${firstError}`
+        : `Translation partially complete: ${pushed} translations pushed across ${steps} step(s).`,
+      type: "warning"
+    };
+  }
+
+  return {
+    message: firstError
+      ? `Canvas translation failed: ${firstError}`
+      : "Canvas translation failed.",
+    type: "error"
+  };
 }
 
 if (document.body) {
