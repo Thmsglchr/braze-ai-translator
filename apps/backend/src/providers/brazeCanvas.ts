@@ -51,6 +51,20 @@ export interface CanvasListItem {
   readonly tags: readonly string[];
 }
 
+export type CanvasNameResolution =
+  | {
+      readonly status: "matched";
+      readonly canvasId: string;
+      readonly canvas: CanvasListItem;
+    }
+  | {
+      readonly status: "not_found";
+    }
+  | {
+      readonly status: "ambiguous";
+      readonly matches: readonly CanvasListItem[];
+    };
+
 export class BrazeCanvasClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -84,9 +98,15 @@ export class BrazeCanvasClient {
   }
 
   async findCanvasByName(name: string): Promise<string | null> {
-    const normalizedName = name.trim().toLowerCase();
+    const result = await this.resolveCanvasByName(name);
+    return result.status === "matched" ? result.canvasId : null;
+  }
+
+  async resolveCanvasByName(name: string): Promise<CanvasNameResolution> {
+    const normalizedName = normalizeCanvasName(name);
     let page = 0;
     const maxPages = 50;
+    const matches: CanvasListItem[] = [];
 
     while (page < maxPages) {
       const canvases = await this.listCanvases(page);
@@ -96,15 +116,30 @@ export class BrazeCanvasClient {
       }
 
       for (const canvas of canvases) {
-        if (canvas.name.trim().toLowerCase() === normalizedName) {
-          return canvas.id;
+        if (normalizeCanvasName(canvas.name) === normalizedName) {
+          matches.push(canvas);
+          if (matches.length > 1) {
+            return {
+              status: "ambiguous",
+              matches
+            };
+          }
         }
       }
 
       page += 1;
     }
 
-    return null;
+    const [match] = matches;
+    if (!match) {
+      return { status: "not_found" };
+    }
+
+    return {
+      status: "matched",
+      canvasId: match.id,
+      canvas: match
+    };
   }
 
   async getCanvasDetails(canvasId: string): Promise<CanvasDetailsResponse> {
@@ -324,6 +359,10 @@ function parseCanvasListItem(raw: unknown): CanvasListItem {
       ? item.tags.filter((t): t is string => typeof t === "string")
       : []
   };
+}
+
+function normalizeCanvasName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function firstNonBlankString(values: readonly unknown[]): string | null {

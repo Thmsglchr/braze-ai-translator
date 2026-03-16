@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   BrazeTemplatePushResultSchema,
@@ -20,6 +20,11 @@ import {
 } from "./providers.js";
 
 const fixedNow = "2026-03-15T19:00:00.000Z";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function createExtractedContentPayload(): ExtractedContentPayload {
   return {
@@ -258,6 +263,61 @@ describe("backend MVP API", () => {
     const body = response.json();
 
     expect(body.message).toContain("X-Braze-Api-Key");
+
+    await app.close();
+  });
+
+  it("rejects canvas translate when canvas name lookup is ambiguous", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            canvases: [
+              {
+                id: "4af78996-57ac-4ff2-8e0f-0b597a55d46f",
+                name: "Wyylde - Translations",
+                last_edited: "2026-03-16T11:46:01+00:00",
+                tags: []
+              },
+              {
+                id: "63b8930d-4c68-42d1-88fd-8c110a12d27e",
+                name: "Wyylde - Translations",
+                last_edited: "2026-03-15T09:01:11+00:00",
+                tags: []
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json"
+            }
+          }
+        )
+      )
+    );
+
+    const app = buildBackendApp({
+      now: () => fixedNow
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/canvas/translate",
+      headers: {
+        "x-braze-api-key": "braze-key",
+        "x-braze-rest-api-url": "https://rest.fra-01.braze.eu"
+      },
+      payload: {
+        canvasName: "Wyylde - Translations"
+      }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().message).toContain(
+      'Found multiple canvases named "Wyylde - Translations"'
+    );
 
     await app.close();
   });

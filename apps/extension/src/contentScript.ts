@@ -464,11 +464,12 @@ function replaceMonacoSelectionViaBridge(
 
 function setupTagInserterListener(): void {
   extensionChrome?.runtime.onMessage?.addListener(
-    (message: unknown, _sender: unknown, _sendResponse: unknown) => {
+    (message: unknown, _sender: unknown, sendResponse: (response: unknown) => void) => {
       if (!isRecord(message)) return;
 
       if (message.type === TOGGLE_SETTINGS_PANEL_MESSAGE_TYPE) {
         toggleSettingsPanel();
+        sendResponse({ ok: true });
         return;
       }
 
@@ -487,6 +488,7 @@ function setupTagInserterListener(): void {
 
       if (selectionText.length > 0) {
         showTagIdModal(selectionText);
+        sendResponse({ ok: true });
         return;
       }
 
@@ -504,6 +506,7 @@ function setupTagInserterListener(): void {
             : selectionTextFromMessage;
         showTagIdModal(text);
       })();
+      sendResponse({ ok: true });
     }
   );
 }
@@ -1298,29 +1301,23 @@ function writeTranslationTagToEditableRange(
   tagged: string
 ): boolean {
   try {
+    const ownerDocument = target.editableElement.ownerDocument;
+    const ownerWindow = ownerDocument.defaultView;
     const htmlBefore = target.editableElement.innerHTML;
 
-    // Attempt 1: Direct text-node replacement.  This is the safest
-    // approach for rich-text editors (TinyMCE, etc.) because it mutates
-    // the DOM directly without going through execCommand or dispatching
-    // synthetic input events that editors may interpret as new insertions.
-    if (replaceSelectedTextInEditableElement(target, tagged, htmlBefore)) {
-      return true;
-    }
-
-    // Attempt 2: Range-based replacement using the saved selection range.
-    const selection = window.getSelection();
+    // Attempt 1: Use the captured Range first so repeated text in the same
+    // editable block does not wrap the wrong occurrence.
+    const selection = ownerWindow?.getSelection() ?? window.getSelection();
     if (selection !== null) {
       target.editableElement.focus();
       selection.removeAllRanges();
-      selection.addRange(target.range);
-
-      const range = selection.getRangeAt(0);
+      const range = target.range.cloneRange();
+      selection.addRange(range);
       range.deleteContents();
-      const textNode = document.createTextNode(tagged);
+      const textNode = ownerDocument.createTextNode(tagged);
       range.insertNode(textNode);
 
-      const collapsedRange = document.createRange();
+      const collapsedRange = ownerDocument.createRange();
       collapsedRange.setStartAfter(textNode);
       collapsedRange.collapse(true);
       selection.removeAllRanges();
@@ -1330,6 +1327,12 @@ function writeTranslationTagToEditableRange(
         dispatchEditorChangeEvents(target.editableElement);
         return true;
       }
+    }
+
+    // Attempt 2: Direct text-node replacement as a fallback when the saved
+    // range no longer maps cleanly to the live editor DOM.
+    if (replaceSelectedTextInEditableElement(target, tagged, htmlBefore)) {
+      return true;
     }
 
     // We intentionally do NOT use document.execCommand("insertText") here.
@@ -1349,7 +1352,7 @@ function replaceSelectedTextInEditableElement(
   tagged: string,
   htmlBefore: string
 ): boolean {
-  const walker = document.createTreeWalker(
+  const walker = target.editableElement.ownerDocument.createTreeWalker(
     target.editableElement,
     NodeFilter.SHOW_TEXT
   );
@@ -1491,6 +1494,8 @@ function replaceSelectedTextInTextNodes(
   selectedText: string,
   tagged: string
 ): boolean {
+  const ownerDocument = root.ownerDocument;
+  const ownerWindow = ownerDocument.defaultView;
   const textNodes = collectTextNodes(root);
   if (textNodes.length === 0) {
     return false;
@@ -1507,16 +1512,16 @@ function replaceSelectedTextInTextNodes(
     return false;
   }
 
-  const range = document.createRange();
+  const range = ownerDocument.createRange();
   range.setStart(startNode, rangeMatch.startOffset);
   range.setEnd(endNode, rangeMatch.endOffset);
   range.deleteContents();
-  const insertedNode = document.createTextNode(tagged);
+  const insertedNode = ownerDocument.createTextNode(tagged);
   range.insertNode(insertedNode);
   range.setStartAfter(insertedNode);
   range.collapse(true);
 
-  const selection = window.getSelection();
+  const selection = ownerWindow?.getSelection() ?? window.getSelection();
   if (selection !== null) {
     selection.removeAllRanges();
     selection.addRange(range);
@@ -1558,7 +1563,7 @@ function findRawSubstringMatch(
 
 function collectTextNodes(root: HTMLElement): Text[] {
   const textNodes: Text[] = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 
   while (true) {
     const currentNode = walker.nextNode();
@@ -1701,21 +1706,25 @@ function findNormalizedTranslationContentRanges(
 function dispatchEditorChangeEvents(
   element: HTMLInputElement | HTMLTextAreaElement | HTMLElement
 ): void {
+  const ownerWindow = element.ownerDocument.defaultView;
+  const InputEventCtor = ownerWindow?.InputEvent;
+  const EventCtor = ownerWindow?.Event ?? Event;
+
   // Notify frameworks that the content changed.  We intentionally do NOT
   // dispatch a beforeinput with inputType "insertText" and data, because
   // TinyMCE (used in the Braze d&d editor) interprets that as a *new*
   // insertion command and duplicates the text.
-  if (typeof InputEvent === "function") {
+  if (typeof InputEventCtor === "function") {
     element.dispatchEvent(
-      new InputEvent("input", {
+      new InputEventCtor("input", {
         bubbles: true,
         inputType: "insertText"
       })
     );
   } else {
-    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new EventCtor("input", { bubbles: true }));
   }
-  element.dispatchEvent(new Event("change", { bubbles: true }));
+  element.dispatchEvent(new EventCtor("change", { bubbles: true }));
 }
 
 // ---------------------------------------------------------------------------
@@ -2180,14 +2189,21 @@ function tryInjectTranslationsNavItem(): void {
 }
 
 function findSettingsNavigationButton(): HTMLButtonElement | null {
-  const direct = document.querySelector(
+  const navigationBody = document.querySelector(
+    ".bcl-side-navigation-body, [class*='side-navigation-body']"
+  );
+  if (!(navigationBody instanceof HTMLElement)) {
+    return null;
+  }
+
+  const direct = navigationBody.querySelector(
     "button[aria-label='Settings'][data-route='/settings']"
   );
   if (direct instanceof HTMLButtonElement) {
     return direct;
   }
 
-  for (const button of Array.from(document.querySelectorAll("button"))) {
+  for (const button of Array.from(navigationBody.querySelectorAll("button"))) {
     if (!(button instanceof HTMLButtonElement)) {
       continue;
     }
@@ -2575,9 +2591,8 @@ async function renderSettingsPanel(): Promise<void> {
           getValue("brazeSourceLocale") || DEFAULT_SOURCE_LOCALE
       });
 
+      closeSettingsPanel();
       showToast("Settings saved.", "success");
-      panel.remove();
-      settingsPanelVisible = false;
     });
 }
 

@@ -174,11 +174,22 @@ export function buildBackendApp(
     let resolvedCanvasId = parsedBody.data.canvasId;
 
     if (!resolvedCanvasId && parsedBody.data.canvasName) {
-      const foundId = await canvasClient.findCanvasByName(
+      const resolution = await canvasClient.resolveCanvasByName(
         parsedBody.data.canvasName
       );
 
-      if (!foundId) {
+      if (resolution.status === "matched") {
+        resolvedCanvasId = resolution.canvasId;
+      } else if (resolution.status === "ambiguous") {
+        return sendApiError(
+          reply,
+          409,
+          "invalid_request",
+          `Found multiple canvases named "${parsedBody.data.canvasName}": ${resolution.matches
+            .map((canvas) => canvas.id)
+            .join(", ")}`
+        );
+      } else {
         return sendApiError(
           reply,
           404,
@@ -186,8 +197,6 @@ export function buildBackendApp(
           `Could not find a canvas named "${parsedBody.data.canvasName}". Please provide the canvas API identifier manually.`
         );
       }
-
-      resolvedCanvasId = foundId;
     }
 
     if (!resolvedCanvasId) {

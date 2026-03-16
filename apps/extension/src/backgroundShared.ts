@@ -37,17 +37,21 @@ export function normalizeCanvasName(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+export function findCanvasMatchesByName(
+  canvases: readonly BrazeCanvasListItem[],
+  canvasName: string
+): readonly BrazeCanvasListItem[] {
+  const normalizedCanvasName = normalizeCanvasName(canvasName);
+
+  return canvases.filter(
+    (canvas) => normalizeCanvasName(canvas.name) === normalizedCanvasName
+  );
+}
+
 export function findCanvasIdByName(
   canvases: readonly BrazeCanvasListItem[],
   canvasName: string
 ): string | null {
-  const normalizedCanvasName = normalizeCanvasName(canvasName);
-
-  for (const canvas of canvases) {
-    if (normalizeCanvasName(canvas.name) === normalizedCanvasName) {
-      return canvas.id;
-    }
-  }
-
-  return null;
+  const [match] = findCanvasMatchesByName(canvases, canvasName);
+  return match?.id ?? null;
 }

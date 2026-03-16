@@ -11,6 +11,7 @@ import {
   type CanvasTranslateHttpResponse
 } from "./backendClient.js";
 import {
+  findCanvasMatchesByName,
   findCanvasIdByName,
   getWrapTranslationContextMenuCreateProperties,
   shouldRetryWrapTranslationMessage,
@@ -170,10 +171,23 @@ if (extensionChrome !== undefined) {
         tab.id,
         message,
         { frameId: info.frameId },
-        (_response) => {
-          // Clear any lastError to avoid "unchecked runtime.lastError" warnings.
-          // Do NOT retry without frameId -- that would broadcast to all frames
-          // and open duplicate modals.
+        (response) => {
+          const lastErrorMessage = extensionChrome.runtime.lastError?.message;
+          if (
+            info.frameId !== 0 &&
+            shouldRetryWrapTranslationMessage(lastErrorMessage, response)
+          ) {
+            extensionChrome.tabs?.sendMessage(
+              tab.id!,
+              message,
+              { frameId: 0 },
+              () => {
+                void extensionChrome.runtime.lastError;
+              }
+            );
+            return;
+          }
+
           void extensionChrome.runtime.lastError;
         }
       );
@@ -267,6 +281,7 @@ async function handleResolveCanvasIdRequest(
 ): Promise<ResolveCanvasIdResponse> {
   const normalizedBaseUrl = message.brazeRestApiUrl.replace(/\/+$/, "");
   const maxPages = 50;
+  const exactMatches: BrazeCanvasListItem[] = [];
 
   for (let page = 0; page < maxPages; page += 1) {
     const url = new URL(`${normalizedBaseUrl}/canvas/list`);
@@ -291,14 +306,24 @@ async function handleResolveCanvasIdRequest(
     }
 
     const canvases = parseCanvasListItems(body);
-    const canvasId = findCanvasIdByName(canvases, message.canvasName);
-    if (canvasId) {
-      return { ok: true, canvasId };
+    exactMatches.push(...findCanvasMatchesByName(canvases, message.canvasName));
+    if (exactMatches.length > 1) {
+      return {
+        ok: false,
+        message: `Found multiple canvases named "${message.canvasName}": ${exactMatches
+          .map((canvas) => canvas.id)
+          .join(", ")}`
+      };
     }
 
     if (canvases.length === 0) {
       break;
     }
+  }
+
+  const canvasId = findCanvasIdByName(exactMatches, message.canvasName);
+  if (canvasId) {
+    return { ok: true, canvasId };
   }
 
   return {
