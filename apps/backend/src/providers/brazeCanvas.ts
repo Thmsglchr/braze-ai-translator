@@ -44,6 +44,13 @@ export interface StepTranslationsResponse {
   readonly translations: readonly StepTranslationEntry[];
 }
 
+export interface CanvasListItem {
+  readonly id: string;
+  readonly name: string;
+  readonly lastEdited: string;
+  readonly tags: readonly string[];
+}
+
 export class BrazeCanvasClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -51,6 +58,53 @@ export class BrazeCanvasClient {
   constructor(options: BrazeCanvasClientOptions) {
     this.apiKey = options.apiKey;
     this.baseUrl = options.restApiBaseUrl.replace(/\/+$/, "");
+  }
+
+  async listCanvases(page = 0): Promise<readonly CanvasListItem[]> {
+    const url = new URL(`${this.baseUrl}/canvas/list`);
+    url.searchParams.set("page", String(page));
+    url.searchParams.set("include_archived", "false");
+    url.searchParams.set("sort_direction", "desc");
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: this.authHeaders()
+    });
+
+    const body = (await response.json()) as Record<string, unknown>;
+
+    if (!response.ok) {
+      throw new Error(
+        `Braze GET /canvas/list returned ${response.status}: ${JSON.stringify(body)}`
+      );
+    }
+
+    const rawCanvases = Array.isArray(body.canvases) ? body.canvases : [];
+    return rawCanvases.map(parseCanvasListItem);
+  }
+
+  async findCanvasByName(name: string): Promise<string | null> {
+    const normalizedName = name.trim().toLowerCase();
+    let page = 0;
+    const maxPages = 50;
+
+    while (page < maxPages) {
+      const canvases = await this.listCanvases(page);
+
+      if (canvases.length === 0) {
+        break;
+      }
+
+      for (const canvas of canvases) {
+        if (canvas.name.trim().toLowerCase() === normalizedName) {
+          return canvas.id;
+        }
+      }
+
+      page += 1;
+    }
+
+    return null;
   }
 
   async getCanvasDetails(canvasId: string): Promise<CanvasDetailsResponse> {
@@ -256,6 +310,19 @@ function parseStepTranslationEntry(raw: unknown): StepTranslationEntry {
       localeKey:
         typeof locale?.locale_key === "string" ? locale.locale_key : ""
     }
+  };
+}
+
+function parseCanvasListItem(raw: unknown): CanvasListItem {
+  const item = raw as Record<string, unknown>;
+  return {
+    id: typeof item.id === "string" ? item.id : "",
+    name: typeof item.name === "string" ? item.name : "",
+    lastEdited:
+      typeof item.last_edited === "string" ? item.last_edited : "",
+    tags: Array.isArray(item.tags)
+      ? item.tags.filter((t): t is string => typeof t === "string")
+      : []
   };
 }
 

@@ -7,14 +7,53 @@ export interface NormalizedTextRangeMatch {
   readonly endOffset: number;
 }
 
+const NORMALIZED_TRANSLATION_BLOCK_START = "{% translation";
+const NORMALIZED_TRANSLATION_BLOCK_END = "{% endtranslation %}";
+
+export function findNormalizedMatchOutsideTranslationTags(
+  source: string,
+  selectedText: string
+): number {
+  const normalizedSelectedText = normalizeMonacoRenderedText(selectedText);
+  if (normalizedSelectedText.length === 0) {
+    return -1;
+  }
+
+  const normalizedSource = normalizeMonacoRenderedText(source);
+  const wrappedRanges = findNormalizedTranslationContentRanges(normalizedSource);
+  let searchStartIndex = 0;
+
+  while (true) {
+    const matchIndex = normalizedSource.indexOf(
+      normalizedSelectedText,
+      searchStartIndex
+    );
+    if (matchIndex < 0) {
+      return -1;
+    }
+
+    const matchEndIndex = matchIndex + normalizedSelectedText.length;
+    const isWrapped = wrappedRanges.some(
+      (range) => matchIndex >= range.start && matchEndIndex <= range.end
+    );
+    if (!isWrapped) {
+      return matchIndex;
+    }
+
+    searchStartIndex = matchIndex + 1;
+  }
+}
+
 export function replaceTextByNormalizedMatch(
   source: string,
   selectedText: string,
   tagged: string
 ): string | null {
   const normalizedSelectedText = normalizeMonacoRenderedText(selectedText);
-  const normalizedSource = normalizeMonacoRenderedText(source);
-  const matchIndex = normalizedSource.indexOf(normalizedSelectedText);
+  const matchIndex = findNormalizedMatchOutsideTranslationTags(
+    source,
+    selectedText
+  );
   if (matchIndex < 0) {
     return null;
   }
@@ -29,6 +68,42 @@ export function replaceTextByNormalizedMatch(
   }
 
   return source.slice(0, rawMatch.start) + tagged + source.slice(rawMatch.end);
+}
+
+function findNormalizedTranslationContentRanges(
+  normalizedSource: string
+): ReadonlyArray<{ readonly start: number; readonly end: number }> {
+  const ranges: Array<{ readonly start: number; readonly end: number }> = [];
+  let searchIndex = 0;
+
+  while (true) {
+    const blockStartIndex = normalizedSource.indexOf(
+      NORMALIZED_TRANSLATION_BLOCK_START,
+      searchIndex
+    );
+    if (blockStartIndex < 0) {
+      break;
+    }
+
+    const openTagEndIndex = normalizedSource.indexOf("%}", blockStartIndex);
+    if (openTagEndIndex < 0) {
+      break;
+    }
+
+    const contentStartIndex = openTagEndIndex + 2;
+    const blockEndIndex = normalizedSource.indexOf(
+      NORMALIZED_TRANSLATION_BLOCK_END,
+      contentStartIndex
+    );
+    if (blockEndIndex < 0) {
+      break;
+    }
+
+    ranges.push({ start: contentStartIndex, end: blockEndIndex });
+    searchIndex = blockEndIndex + NORMALIZED_TRANSLATION_BLOCK_END.length;
+  }
+
+  return ranges;
 }
 
 export function findRawSubstringMatch(

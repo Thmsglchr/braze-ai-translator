@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  findNormalizedMatchOutsideTranslationTags,
   findNormalizedTextRangeInSegments,
   findRawSubstringMatch,
   replaceTextByNormalizedMatch
@@ -39,6 +40,24 @@ describe("domReplacementShared", () => {
         "{% translation title %}We miss you!{% endtranslation %}"
       )
     ).toBeNull();
+  });
+
+  it("ignores matches that are already wrapped in translation tags", () => {
+    expect(
+      findNormalizedMatchOutsideTranslationTags(
+        "{% translation Hello %}Hello {{${first_name}}},{% endtranslation %}",
+        "Hello {{${first_name}}},"
+      )
+    ).toBe(-1);
+  });
+
+  it("prefers an unwrapped occurrence when wrapped and unwrapped copies coexist", () => {
+    expect(
+      findNormalizedMatchOutsideTranslationTags(
+        "{% translation Hello %}Hello {{${first_name}}},{% endtranslation %} Hello {{${first_name}}},",
+        "Hello {{${first_name}}},"
+      )
+    ).toBeGreaterThanOrEqual(0);
   });
 
   it("maps a normalized match back to raw string offsets", () => {

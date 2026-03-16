@@ -171,6 +171,34 @@ export function buildBackendApp(
         })
       : providers.translationProvider;
 
+    let resolvedCanvasId = parsedBody.data.canvasId;
+
+    if (!resolvedCanvasId && parsedBody.data.canvasName) {
+      const foundId = await canvasClient.findCanvasByName(
+        parsedBody.data.canvasName
+      );
+
+      if (!foundId) {
+        return sendApiError(
+          reply,
+          404,
+          "invalid_request",
+          `Could not find a canvas named "${parsedBody.data.canvasName}". Please provide the canvas API identifier manually.`
+        );
+      }
+
+      resolvedCanvasId = foundId;
+    }
+
+    if (!resolvedCanvasId) {
+      return sendApiError(
+        reply,
+        400,
+        "invalid_request",
+        "Either canvasId or canvasName must be provided."
+      );
+    }
+
     const canvasWorkflow = new CanvasTranslationWorkflowProvider({
       now,
       translationProvider: translationProv,
@@ -180,7 +208,7 @@ export function buildBackendApp(
 
     return executeRoute<CanvasTranslateResponse>(
       reply,
-      async () => canvasWorkflow.translateCanvas(parsedBody.data.canvasId),
+      async () => canvasWorkflow.translateCanvas(resolvedCanvasId),
       CanvasTranslateResponseSchema
     );
   });

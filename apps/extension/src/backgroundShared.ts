@@ -25,3 +25,29 @@ export function shouldRetryWrapTranslationMessage(
 
   return response === undefined;
 }
+
+export interface BrazeCanvasListItem {
+  readonly id: string;
+  readonly name: string;
+  readonly tags?: readonly string[];
+  readonly last_edited?: string;
+}
+
+export function normalizeCanvasName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+export function findCanvasIdByName(
+  canvases: readonly BrazeCanvasListItem[],
+  canvasName: string
+): string | null {
+  const normalizedCanvasName = normalizeCanvasName(canvasName);
+
+  for (const canvas of canvases) {
+    if (normalizeCanvasName(canvas.name) === normalizedCanvasName) {
+      return canvas.id;
+    }
+  }
+
+  return null;
+}

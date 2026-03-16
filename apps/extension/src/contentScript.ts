@@ -24,6 +24,8 @@ const BRAZE_REST_ENDPOINTS: readonly {
 
 const TRANSLATE_CANVAS_MESSAGE_TYPE =
   "braze-ai-translator/translate-canvas";
+const RESOLVE_CANVAS_ID_MESSAGE_TYPE =
+  "braze-ai-translator/resolve-canvas-id";
 const WRAP_TRANSLATION_TAG_MESSAGE_TYPE =
   "braze-ai-translator/wrap-translation-tag";
 const TOGGLE_SETTINGS_PANEL_MESSAGE_TYPE =
@@ -32,6 +34,12 @@ const TOGGLE_SETTINGS_PANEL_MESSAGE_TYPE =
 interface CanvasTranslateResultMessage {
   readonly ok: boolean;
   readonly result?: CanvasTranslateResponse;
+  readonly message?: string;
+}
+
+interface ResolveCanvasIdResultMessage {
+  readonly ok: boolean;
+  readonly canvasId?: string;
   readonly message?: string;
 }
 
@@ -128,6 +136,10 @@ const SETTINGS_DEFAULTS: StoredSettings = {
 const extensionChrome = getExtensionChrome();
 let pendingTagInsertionTarget: TagInsertionTarget | null = null;
 let lastFocusedMonacoTextarea: HTMLTextAreaElement | null = null;
+let tagInsertionInFlight = false;
+
+const NORMALIZED_TRANSLATION_BLOCK_START = "{% translation";
+const NORMALIZED_TRANSLATION_BLOCK_END = "{% endtranslation %}";
 
 function getExtensionChrome(): ChromeLike | undefined {
   return (globalThis as typeof globalThis & { chrome?: ChromeLike }).chrome;
@@ -217,148 +229,6 @@ function parseCanvasNameFromTitle(): string | null {
   }
 
   return null;
-}
-
-let cachedCanvasId: string | null | undefined;
-
-function parseCanvasIdFromPage(): string | null {
-  if (cachedCanvasId !== undefined) {
-    return cachedCanvasId;
-  }
-
-  const url = new URL(window.location.href);
-  const candidates: string[] = [];
-  const queryParamCandidates = [
-    "workflow_id",
-    "workflowId",
-    "canvas_api_id",
-    "canvasApiId",
-    "api_id",
-    "apiId",
-    "canvas_id",
-    "canvasId"
-  ];
-
-  for (const queryParam of queryParamCandidates) {
-    const queryValue = url.searchParams.get(queryParam);
-    const normalizedQueryValue = normalizeCanvasIdCandidate(queryValue);
-    if (normalizedQueryValue !== null) {
-      candidates.push(normalizedQueryValue);
-    }
-  }
-
-  candidates.push(...collectCanvasIdCandidatesFromPageState());
-
-  const segments = url.pathname
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
-  const markerSegments = new Set([
-    "canvas",
-    "canvases",
-    "canvas_editor",
-    "details",
-    "edit",
-    "preload"
-  ]);
-
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = segments[index]?.toLowerCase();
-    if (segment === undefined || !markerSegments.has(segment)) {
-      continue;
-    }
-
-    for (let offset = 1; offset <= 2; offset += 1) {
-      const candidate = normalizeCanvasIdCandidate(segments[index + offset]);
-      if (candidate !== null) {
-        candidates.push(candidate);
-      }
-    }
-  }
-
-  cachedCanvasId = choosePreferredCanvasIdCandidate(candidates);
-  return cachedCanvasId;
-}
-
-function normalizeCanvasIdCandidate(value: string | null | undefined): string | null {
-  const normalized = value?.trim() ?? "";
-
-  if (normalized.length === 0) {
-    return null;
-  }
-
-  if (
-    /^[0-9a-f]{24}$/i.test(normalized) ||
-    /^[0-9a-f-]{36}$/i.test(normalized) ||
-    /^[A-Za-z0-9_-]{12,}$/i.test(normalized)
-  ) {
-    return normalized;
-  }
-
-  return null;
-}
-
-function collectCanvasIdCandidatesFromPageState(): string[] {
-  const textSources: string[] = [];
-  const scriptElements = Array.from(document.querySelectorAll("script:not([src])"));
-
-  for (const scriptElement of scriptElements) {
-    const text = scriptElement.textContent?.trim() ?? "";
-    if (text.length > 0) {
-      textSources.push(text);
-    }
-  }
-
-  const htmlSnippets = [
-    document.documentElement.getAttribute("data-page") ?? "",
-    document.body.getAttribute("data-page") ?? "",
-    document.documentElement.innerHTML
-  ];
-  textSources.push(...htmlSnippets.filter((snippet) => snippet.length > 0));
-
-  const candidates: string[] = [];
-  const structuredPatterns = [
-    /"(?:workflow_id|workflowId|canvas_api_id|canvasApiId|api_id|apiId|canvas_id|canvasId|uuid)"\s*:\s*"([^"]+)"/gi,
-    /(?:workflow_id|workflowId|canvas_api_id|canvasApiId|api_id|apiId|canvas_id|canvasId|uuid)\s*[=:]\s*"([^"]+)"/gi
-  ];
-
-  for (const source of textSources) {
-    for (const pattern of structuredPatterns) {
-      for (const match of source.matchAll(pattern)) {
-        const candidate = normalizeCanvasIdCandidate(match[1]);
-        if (candidate !== null) {
-          candidates.push(candidate);
-        }
-      }
-    }
-  }
-
-  return candidates;
-}
-
-function choosePreferredCanvasIdCandidate(candidates: readonly string[]): string | null {
-  const uniqueCandidates = Array.from(new Set(candidates));
-  if (uniqueCandidates.length === 0) {
-    return null;
-  }
-
-  uniqueCandidates.sort((left, right) => {
-    return getCanvasIdCandidateRank(right) - getCanvasIdCandidateRank(left);
-  });
-
-  return uniqueCandidates[0] ?? null;
-}
-
-function getCanvasIdCandidateRank(candidate: string): number {
-  if (/^[0-9a-f-]{36}$/i.test(candidate)) {
-    return 3;
-  }
-
-  if (/^[0-9a-f]{24}$/i.test(candidate)) {
-    return 2;
-  }
-
-  return 1;
 }
 
 function isBrazePage(): boolean {
@@ -887,6 +757,7 @@ function showTagIdModal(selectedText: string): void {
   backdrop.appendChild(modal);
   document.body.appendChild(backdrop);
   input.focus();
+  let didSubmit = false;
 
   const close = (clearPendingTarget = true): void => {
     if (clearPendingTarget) {
@@ -901,7 +772,11 @@ function showTagIdModal(selectedText: string): void {
 
   cancelButton.addEventListener("click", () => close());
 
-  confirmButton.addEventListener("click", () => {
+  const submit = (): void => {
+    if (didSubmit) {
+      return;
+    }
+
     const tagId = input.value.trim();
     if (!tagId) {
       input.style.borderColor = "#df3341";
@@ -909,25 +784,22 @@ function showTagIdModal(selectedText: string): void {
       return;
     }
 
+    didSubmit = true;
+    confirmButton.disabled = true;
+    confirmButton.style.opacity = "0.7";
+    confirmButton.style.cursor = "default";
     close(false);
     window.setTimeout(() => {
       void insertTranslationTag(tagId, selectedText);
     }, 0);
-  });
+  };
+
+  confirmButton.addEventListener("click", submit);
 
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
-      const tagId = input.value.trim();
-      if (!tagId) {
-        input.style.borderColor = "#df3341";
-        input.style.boxShadow = "0 0 0 3px rgba(255, 240, 240, 1)";
-        return;
-      }
       e.preventDefault();
-      close(false);
-      window.setTimeout(() => {
-        void insertTranslationTag(tagId, selectedText);
-      }, 0);
+      submit();
     }
     if (e.key === "Escape") close();
   });
@@ -937,6 +809,12 @@ async function insertTranslationTag(
   tagId: string,
   selectedText: string
 ): Promise<void> {
+  if (tagInsertionInFlight) {
+    return;
+  }
+  tagInsertionInFlight = true;
+
+  try {
   const savedTarget = pendingTagInsertionTarget;
   pendingTagInsertionTarget = null;
 
@@ -1036,6 +914,9 @@ async function insertTranslationTag(
 
   // Last resort: copy to clipboard so the user can paste manually
   await copyTagToClipboardFallback(tagged);
+  } finally {
+    tagInsertionInFlight = false;
+  }
 }
 
 async function copyTagToClipboardFallback(tagged: string): Promise<void> {
@@ -1390,7 +1271,7 @@ async function writeTranslationTagToMonacoEditor(
         selectionEnd,
         "end"
       );
-      dispatchEditorChangeEvents(target.inputElement, tagged);
+      dispatchEditorChangeEvents(target.inputElement);
 
       const textAfter = await readMonacoEditorTextAfterTick(
         target.editorElement,
@@ -1401,7 +1282,7 @@ async function writeTranslationTagToMonacoEditor(
       }
     }
 
-    dispatchEditorChangeEvents(target.inputElement, tagged);
+    dispatchEditorChangeEvents(target.inputElement);
     return didMonacoContentChange(
       textBefore,
       await readMonacoEditorTextAfterTick(target.editorElement, textBefore),
@@ -1416,43 +1297,48 @@ function writeTranslationTagToEditableRange(
   target: Extract<TagInsertionTarget, { readonly kind: "contenteditable" }>,
   tagged: string
 ): boolean {
-  const selection = window.getSelection();
-
-  if (selection === null) {
-    return false;
-  }
-
   try {
     const htmlBefore = target.editableElement.innerHTML;
-    target.editableElement.focus();
-    selection.removeAllRanges();
-    selection.addRange(target.range);
 
-    if (document.queryCommandSupported?.("insertText")) {
-      document.execCommand("insertText", false, tagged);
+    // Attempt 1: Direct text-node replacement.  This is the safest
+    // approach for rich-text editors (TinyMCE, etc.) because it mutates
+    // the DOM directly without going through execCommand or dispatching
+    // synthetic input events that editors may interpret as new insertions.
+    if (replaceSelectedTextInEditableElement(target, tagged, htmlBefore)) {
+      return true;
+    }
+
+    // Attempt 2: Range-based replacement using the saved selection range.
+    const selection = window.getSelection();
+    if (selection !== null) {
+      target.editableElement.focus();
+      selection.removeAllRanges();
+      selection.addRange(target.range);
+
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      const textNode = document.createTextNode(tagged);
+      range.insertNode(textNode);
+
+      const collapsedRange = document.createRange();
+      collapsedRange.setStartAfter(textNode);
+      collapsedRange.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(collapsedRange);
+
       if (target.editableElement.innerHTML !== htmlBefore) {
-        dispatchEditorChangeEvents(target.editableElement, tagged);
+        dispatchEditorChangeEvents(target.editableElement);
         return true;
       }
     }
 
-    const range = selection.getRangeAt(0);
-    range.deleteContents();
-    const textNode = document.createTextNode(tagged);
-    range.insertNode(textNode);
+    // We intentionally do NOT use document.execCommand("insertText") here.
+    // TinyMCE (used in Braze's drag-and-drop editor) intercepts the native
+    // beforeinput event fired by execCommand and inserts the text via its
+    // own API, while the browser also performs the native insertion --
+    // resulting in the text appearing twice.
 
-    const collapsedRange = document.createRange();
-    collapsedRange.setStartAfter(textNode);
-    collapsedRange.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(collapsedRange);
-
-    if (target.editableElement.innerHTML !== htmlBefore) {
-      dispatchEditorChangeEvents(target.editableElement, tagged);
-      return true;
-    }
-
-    return replaceSelectedTextInEditableElement(target, tagged, htmlBefore);
+    return false;
   } catch {
     return false;
   }
@@ -1486,7 +1372,7 @@ function replaceSelectedTextInEditableElement(
       currentValue.slice(matchIndex + target.selectedText.length);
 
     if (target.editableElement.innerHTML !== htmlBefore) {
-      dispatchEditorChangeEvents(target.editableElement, tagged);
+      dispatchEditorChangeEvents(target.editableElement);
       return true;
     }
   }
@@ -1505,7 +1391,7 @@ function replaceSelectedTextInDomFallback(
   const candidateRoots = findDomReplacementRoots(selectedText);
   for (const root of candidateRoots) {
     if (replaceSelectedTextInTextNodes(root, selectedText, tagged)) {
-      dispatchEditorChangeEvents(root, tagged);
+      dispatchEditorChangeEvents(root);
       return true;
     }
   }
@@ -1525,7 +1411,7 @@ function replaceSelectedTextInBeeIframeFallback(
   const candidateRoots = findDomReplacementRootsInDocument(beeDocument, selectedText);
   for (const root of candidateRoots) {
     if (replaceSelectedTextInTextNodes(root, selectedText, tagged)) {
-      dispatchEditorChangeEvents(root, tagged);
+      dispatchEditorChangeEvents(root);
       return true;
     }
   }
@@ -1702,7 +1588,11 @@ function findNormalizedTextRangeInTextNodes(
   const normalizedHaystack = textNodes
     .map((node) => normalizeMonacoRenderedText(node.data))
     .join("");
-  const normalizedStartIndex = normalizedHaystack.indexOf(normalizedSelectedText);
+  const normalizedStartIndex =
+    findNormalizedMatchOutsideTranslationTagsInNormalizedSource(
+      normalizedHaystack,
+      normalizedSelectedText
+    );
   if (normalizedStartIndex < 0) {
     return null;
   }
@@ -1743,31 +1633,89 @@ function findNormalizedTextRangeInTextNodes(
   return null;
 }
 
-function dispatchEditorChangeEvents(
-  element: HTMLInputElement | HTMLTextAreaElement | HTMLElement,
-  data = ""
-): void {
-  if (typeof InputEvent === "function") {
-    element.dispatchEvent(
-      new InputEvent("beforeinput", {
-        bubbles: true,
-        cancelable: true,
-        inputType: "insertText",
-        data
-      })
+function findNormalizedMatchOutsideTranslationTagsInNormalizedSource(
+  normalizedSource: string,
+  normalizedSelectedText: string
+): number {
+  const wrappedRanges =
+    findNormalizedTranslationContentRanges(normalizedSource);
+  let searchStartIndex = 0;
+
+  while (true) {
+    const matchIndex = normalizedSource.indexOf(
+      normalizedSelectedText,
+      searchStartIndex
     );
+    if (matchIndex < 0) {
+      return -1;
+    }
+
+    const matchEndIndex = matchIndex + normalizedSelectedText.length;
+    const isWrapped = wrappedRanges.some(
+      (range) => matchIndex >= range.start && matchEndIndex <= range.end
+    );
+    if (!isWrapped) {
+      return matchIndex;
+    }
+
+    searchStartIndex = matchIndex + 1;
+  }
+}
+
+function findNormalizedTranslationContentRanges(
+  normalizedSource: string
+): ReadonlyArray<{ readonly start: number; readonly end: number }> {
+  const ranges: Array<{ readonly start: number; readonly end: number }> = [];
+  let searchIndex = 0;
+
+  while (true) {
+    const blockStartIndex = normalizedSource.indexOf(
+      NORMALIZED_TRANSLATION_BLOCK_START,
+      searchIndex
+    );
+    if (blockStartIndex < 0) {
+      break;
+    }
+
+    const openTagEndIndex = normalizedSource.indexOf("%}", blockStartIndex);
+    if (openTagEndIndex < 0) {
+      break;
+    }
+
+    const contentStartIndex = openTagEndIndex + 2;
+    const blockEndIndex = normalizedSource.indexOf(
+      NORMALIZED_TRANSLATION_BLOCK_END,
+      contentStartIndex
+    );
+    if (blockEndIndex < 0) {
+      break;
+    }
+
+    ranges.push({ start: contentStartIndex, end: blockEndIndex });
+    searchIndex = blockEndIndex + NORMALIZED_TRANSLATION_BLOCK_END.length;
+  }
+
+  return ranges;
+}
+
+function dispatchEditorChangeEvents(
+  element: HTMLInputElement | HTMLTextAreaElement | HTMLElement
+): void {
+  // Notify frameworks that the content changed.  We intentionally do NOT
+  // dispatch a beforeinput with inputType "insertText" and data, because
+  // TinyMCE (used in the Braze d&d editor) interprets that as a *new*
+  // insertion command and duplicates the text.
+  if (typeof InputEvent === "function") {
     element.dispatchEvent(
       new InputEvent("input", {
         bubbles: true,
-        inputType: "insertText",
-        data
+        inputType: "insertText"
       })
     );
   } else {
     element.dispatchEvent(new Event("input", { bubbles: true }));
   }
   element.dispatchEvent(new Event("change", { bubbles: true }));
-  element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: " " }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1782,7 +1730,6 @@ function tryInjectTranslateButton(): void {
     return;
   }
 
-  const canvasId = parseCanvasIdFromPage();
   const testButton = findCanvasTestButton();
   if (!testButton) return;
 
@@ -1796,10 +1743,10 @@ function tryInjectTranslateButton(): void {
   btn.setAttribute("data-loading-state", "idle");
   btn.className = testButton.className;
   btn.type = "button";
-  btn.innerHTML = `<span class="${getButtonContentClass(testButton)}"><span class="${getButtonIconClass(testButton)}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M359.9 0C393 0 420 27 420 60.1l0 15.8 22.7-22.6c12.5-12.5 32.8-12.5 45.3 0s12.5 32.8 0 45.3L420 166.6l0 15.3c0 33.1-27 60.1-60.1 60.1l-75.8 0c-33.1 0-60.1-27-60.1-60.1l0-121.8C224 27 251 0 284.1 0l75.8 0zM152.1 270l75.8 0c33.1 0 60.1 27 60.1 60.1l0 121.8c0 33.1-27 60.1-60.1 60.1l-75.8 0C119 512 92 485 92 451.9l0-15.8-22.6 22.6c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L92 345.4l0-15.3C92 297 119 270 152.1 270zM128 345.9l0 106c0 13.3 10.8 24.1 24.1 24.1l75.8 0c13.3 0 24.1-10.8 24.1-24.1l0-121.8c0-13.3-10.8-24.1-24.1-24.1l-75.8 0c-13.3 0-24.1 10.8-24.1 24.1l0 15.8zm132-164c0 13.3 10.8 24.1 24.1 24.1l75.8 0c13.3 0 24.1-10.8 24.1-24.1l0-121.8c0-13.3-10.8-24.1-24.1-24.1l-75.8 0C270.8 36 260 46.8 260 60.1l0 121.8z"/></svg></span><span>Translate Canvas</span></span>`;
+  btn.innerHTML = `<span class="${getButtonContentClass(testButton)}"><span class="${getButtonIconClass(testButton)}"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.545 6.714 4.11 8H3l1.862-5h1.284L8 8H6.833l-.435-1.286zm1.634-.736L5.5 3.956h-.049l-.679 2.022z"></path><path d="M0 2a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v3h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-3H2a2 2 0 0 1-2-2zm2-1a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zm7.138 9.995q.289.451.63.846c-.748.575-1.673 1.001-2.768 1.292.178.217.451.635.555.867 1.125-.359 2.08-.844 2.886-1.494.777.665 1.739 1.165 2.93 1.472.133-.254.414-.673.629-.89-1.125-.253-2.057-.694-2.82-1.284.681-.747 1.222-1.651 1.621-2.757H14V8h-3v1.047h.765c-.318.844-.74 1.546-1.272 2.13a6 6 0 0 1-.415-.492 2 2 0 0 1-.94.31"></path></svg></span><span>Translate Canvas</span></span>`;
 
   btn.addEventListener("click", () => {
-    void handleTranslateCanvasClick(canvasId, btn);
+    void handleTranslateCanvasClick(btn);
   });
 
   wrapper.appendChild(btn);
@@ -1860,7 +1807,6 @@ function getButtonIconClass(reference: Element): string {
 }
 
 async function handleTranslateCanvasClick(
-  canvasId: string | null,
   btn: HTMLButtonElement
 ): Promise<void> {
   const settings = await loadStoredSettings();
@@ -1875,11 +1821,21 @@ async function handleTranslateCanvasClick(
 
   const originalText = btn.querySelector("span:last-child")?.textContent ?? "";
   const lastSpan = btn.querySelector("span:last-child");
-  if (lastSpan) lastSpan.textContent = "Translating...";
-  btn.disabled = true;
-  const progressModal = showCanvasTranslateProgressModal();
+  let progressModal: { readonly close: () => void } | null = null;
 
   try {
+    const canvasName = parseCanvasNameFromTitle();
+    if (!canvasName) {
+      showToast(
+        "Could not determine the canvas name from the page title.",
+        "error"
+      );
+      return;
+    }
+
+    if (lastSpan) lastSpan.textContent = "Resolving...";
+    btn.disabled = true;
+
     const requestHeaders = {
       brazeRestApiUrl: settings.brazeRestApiUrl,
       brazeApiKey: settings.brazeApiKey,
@@ -1887,48 +1843,30 @@ async function handleTranslateCanvasClick(
       brazeSourceLocale: settings.brazeSourceLocale || undefined
     };
 
-    const canvasName = parseCanvasNameFromTitle();
-    let effectiveCanvasId: string | undefined =
-      canvasId && canvasId.length > 0 ? canvasId : undefined;
-
-    // If we have either an ID from the URL or a name from the <title>, try
-    // the backend directly -- it will resolve name -> ID via /canvas/list
-    // when only the name is provided.
-    if (!effectiveCanvasId && !canvasName) {
-      effectiveCanvasId = (await promptForCanvasApiId(undefined)) ?? undefined;
-      if (!effectiveCanvasId) {
-        progressModal.close();
-        showToast("Canvas translation cancelled.", "info");
-        return;
-      }
-    }
-
-    let result = await requestCanvasTranslate(
-      settings.backendBaseUrl,
-      effectiveCanvasId,
-      requestHeaders,
-      canvasName ?? undefined
+    const resolvedCanvasId = await requestResolveCanvasId(
+      settings.brazeRestApiUrl,
+      settings.brazeApiKey,
+      canvasName
     );
-
-    if (
-      !result.ok &&
-      (isCanvasApiIdentifierErrorMessage(result.message) ||
-        isCanvasNotFoundByNameMessage(result.message))
-    ) {
-      const manualCanvasId = await promptForCanvasApiId(effectiveCanvasId);
-      if (!manualCanvasId) {
-        progressModal.close();
-        showToast("Canvas translation cancelled.", "info");
-        return;
-      }
-
-      effectiveCanvasId = manualCanvasId;
-      result = await requestCanvasTranslate(
-        settings.backendBaseUrl,
-        effectiveCanvasId,
-        requestHeaders
+    if (!resolvedCanvasId.ok || !resolvedCanvasId.canvasId) {
+      showToast(
+        resolvedCanvasId.message ??
+          `Could not find a canvas named "${canvasName}".`,
+        "error"
       );
+      return;
     }
+
+    if (lastSpan) {
+      lastSpan.textContent = "Translating...";
+    }
+    progressModal = showCanvasTranslateProgressModal();
+
+    const result = await requestCanvasTranslate(
+      settings.backendBaseUrl,
+      resolvedCanvasId.canvasId,
+      requestHeaders
+    );
 
     if (result.ok && result.result) {
       progressModal.close();
@@ -1942,220 +1880,14 @@ async function handleTranslateCanvasClick(
       );
     }
   } catch (error: unknown) {
-    progressModal.close();
+    progressModal?.close();
     const msg = error instanceof Error ? error.message : "Unknown error";
     showToast(`Error: ${msg}`, "error");
   } finally {
-    progressModal.close();
+    progressModal?.close();
     if (lastSpan) lastSpan.textContent = originalText;
     btn.disabled = false;
   }
-}
-
-function isCanvasApiIdentifierErrorMessage(message: string | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-
-  return message.toLowerCase().includes("canvas api identifier");
-}
-
-async function promptForCanvasApiId(
-  initialValue: string | undefined
-): Promise<string | null> {
-  return new Promise<string | null>((resolve) => {
-    const existing = document.getElementById("braze-ai-canvas-id-modal-backdrop");
-    if (existing) {
-      existing.remove();
-    }
-
-    const backdrop = document.createElement("div");
-    backdrop.id = "braze-ai-canvas-id-modal-backdrop";
-    Object.assign(backdrop.style, {
-      position: "fixed",
-      inset: "0",
-      zIndex: "2147483647",
-      background: "rgba(26, 26, 46, 0.28)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: "24px"
-    });
-
-    const modal = document.createElement("div");
-    Object.assign(modal.style, {
-      background: "#fff",
-      borderRadius: BRAZE_RADIUS_LG,
-      border: `1px solid ${BRAZE_BORDER_LIGHT}`,
-      padding: "24px",
-      width: "min(520px, calc(100vw - 48px))",
-      boxShadow: BRAZE_SHADOW_MD,
-      fontFamily:
-        "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
-      color: BRAZE_TEXT,
-      display: "flex",
-      flexDirection: "column",
-      gap: "18px"
-    });
-
-    const header = document.createElement("div");
-    Object.assign(header.style, {
-      display: "flex",
-      alignItems: "center",
-      gap: "14px"
-    });
-
-    const iconShell = document.createElement("div");
-    Object.assign(iconShell.style, {
-      width: "44px",
-      height: "44px",
-      borderRadius: BRAZE_RADIUS,
-      background: BRAZE_PURPLE_SURFACE,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      flexShrink: "0"
-    });
-    const iconImage = createExtensionIconImage(22);
-    if (iconImage) {
-      iconShell.appendChild(iconImage);
-    }
-
-    const titleBlock = document.createElement("div");
-    const title = document.createElement("div");
-    title.textContent = "Enter Canvas API ID";
-    Object.assign(title.style, {
-      fontSize: "18px",
-      lineHeight: "1.2",
-      fontWeight: "700",
-      color: BRAZE_TEXT
-    });
-    const subtitle = document.createElement("div");
-    subtitle.textContent =
-      "Braze needs the Canvas API identifier here. Paste the UUID-like canvas ID and retry.";
-    Object.assign(subtitle.style, {
-      marginTop: "4px",
-      fontSize: "14px",
-      lineHeight: "1.45",
-      color: BRAZE_MUTED
-    });
-    titleBlock.appendChild(title);
-    titleBlock.appendChild(subtitle);
-    header.appendChild(iconShell);
-    header.appendChild(titleBlock);
-
-    const input = document.createElement("input");
-    input.type = "text";
-    input.value = initialValue ?? "";
-    input.placeholder = "e.g. 4af78996-57ac-4ff2-8e0f-0b597a55d46f";
-    Object.assign(input.style, {
-      width: "100%",
-      height: "48px",
-      padding: "0 14px",
-      border: `1px solid ${BRAZE_BORDER}`,
-      borderRadius: BRAZE_RADIUS_SM,
-      fontSize: "14px",
-      color: BRAZE_TEXT,
-      boxSizing: "border-box",
-      background: "#fff",
-      outline: "none"
-    });
-    input.addEventListener("focus", () => {
-      input.style.borderColor = BRAZE_PURPLE;
-      input.style.boxShadow = "0 0 0 3px rgba(240, 232, 253, 1)";
-    });
-    input.addEventListener("blur", () => {
-      input.style.borderColor = BRAZE_BORDER;
-      input.style.boxShadow = "none";
-    });
-
-    const hint = document.createElement("div");
-    hint.textContent =
-      "This is usually the workflow/API UUID, not the Mongo-style ID in the Braze URL.";
-    Object.assign(hint.style, {
-      fontSize: "12px",
-      lineHeight: "1.45",
-      color: BRAZE_MUTED
-    });
-
-    const actions = document.createElement("div");
-    Object.assign(actions.style, {
-      display: "flex",
-      justifyContent: "flex-end",
-      gap: "12px",
-      flexWrap: "wrap"
-    });
-
-    const cancelButton = document.createElement("button");
-    cancelButton.type = "button";
-    cancelButton.textContent = "Cancel";
-    Object.assign(cancelButton.style, {
-      height: "40px",
-      padding: "0 24px",
-      borderRadius: BRAZE_RADIUS_SM,
-      border: `1px solid ${BRAZE_PURPLE}`,
-      background: "#fff",
-      color: BRAZE_PURPLE,
-      cursor: "pointer",
-      fontSize: "14px",
-      fontWeight: "600"
-    });
-
-    const confirmButton = document.createElement("button");
-    confirmButton.type = "button";
-    confirmButton.textContent = "Translate";
-    Object.assign(confirmButton.style, {
-      height: "40px",
-      padding: "0 28px",
-      borderRadius: BRAZE_RADIUS_SM,
-      border: `1px solid ${BRAZE_PURPLE}`,
-      background: BRAZE_PURPLE,
-      color: "#fff",
-      cursor: "pointer",
-      fontSize: "14px",
-      fontWeight: "600"
-    });
-
-    const close = (value: string | null): void => {
-      backdrop.remove();
-      resolve(value);
-    };
-
-    cancelButton.addEventListener("click", () => close(null));
-    confirmButton.addEventListener("click", () => {
-      const value = input.value.trim();
-      if (!value) {
-        input.style.borderColor = "#E02B2B";
-        input.style.boxShadow = "0 0 0 3px rgba(255, 240, 240, 1)";
-        return;
-      }
-      close(value);
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        confirmButton.click();
-      }
-      if (event.key === "Escape") {
-        close(null);
-      }
-    });
-    backdrop.addEventListener("click", (event) => {
-      if (event.target === backdrop) {
-        close(null);
-      }
-    });
-
-    actions.appendChild(cancelButton);
-    actions.appendChild(confirmButton);
-    modal.appendChild(header);
-    modal.appendChild(input);
-    modal.appendChild(hint);
-    modal.appendChild(actions);
-    backdrop.appendChild(modal);
-    document.body.appendChild(backdrop);
-    input.focus();
-  });
 }
 
 function showCanvasTranslateProgressModal(): { readonly close: () => void } {
@@ -2199,16 +1931,35 @@ function showCanvasTranslateProgressModal(): { readonly close: () => void } {
 
   const spinner = document.createElement("div");
   Object.assign(spinner.style, {
-    width: "40px",
-    height: "40px",
+    width: "48px",
+    height: "48px",
     borderRadius: "999px",
-    border: `3px solid ${BRAZE_PURPLE_SURFACE}`,
-    borderTopColor: BRAZE_PURPLE,
+    background:
+      "conic-gradient(from 210deg, rgba(128, 29, 215, 0) 0deg, #801dd7 140deg, #FFA524 260deg, rgba(255, 165, 36, 0) 320deg, rgba(128, 29, 215, 0) 360deg)",
     animation: "braze-ai-spin 0.9s linear infinite"
   });
+  spinner.setAttribute("aria-hidden", "true");
+
+  const spinnerCenter = document.createElement("div");
+  Object.assign(spinnerCenter.style, {
+    position: "relative",
+    width: "100%",
+    height: "100%",
+    borderRadius: "999px"
+  });
+
+  const spinnerHole = document.createElement("div");
+  Object.assign(spinnerHole.style, {
+    position: "absolute",
+    inset: "5px",
+    borderRadius: "999px",
+    background: "#fff"
+  });
+  spinnerCenter.appendChild(spinnerHole);
+  spinner.appendChild(spinnerCenter);
 
   const title = document.createElement("div");
-  title.textContent = "Translating canvas";
+  title.textContent = "Translation in progress...";
   Object.assign(title.style, {
     fontSize: "18px",
     lineHeight: "1.2",
@@ -2299,97 +2050,241 @@ async function requestCanvasTranslate(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Settings Panel (small gear icon in bottom-left)
-// ---------------------------------------------------------------------------
-
-function injectSettingsGear(): void {
-  if (document.getElementById("braze-ai-settings-gear")) return;
-
-  const gear = document.createElement("button");
-  gear.id = "braze-ai-settings-gear";
-  gear.type = "button";
-  Object.assign(gear.style, {
-    position: "fixed",
-    bottom: "12px",
-    left: "12px",
-    zIndex: "2147483646",
-    width: "52px",
-    height: "52px",
-    borderRadius: "18px",
-    border: `1px solid ${BRAZE_BORDER}`,
-    background: "#fff",
-    color: BRAZE_PURPLE,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    cursor: "pointer",
-    boxShadow: BRAZE_SHADOW_MD,
-    userSelect: "none",
-    padding: "0",
-    transition: "background 0.15s ease, border-color 0.15s ease"
-  });
-  gear.title = "Braze AI Translator Settings";
-
-  const gearIconImage = createExtensionIconImage(24);
-  if (gearIconImage) {
-    gear.appendChild(gearIconImage);
-  } else {
-    gear.appendChild(
-      createToastIcon(
-        "M487.4 315.7l-42.6-24.6c2.7-13.9 4.2-28.3 4.2-43.1s-1.5-29.2-4.2-43.1l42.6-24.6c15.1-8.7 21.3-27.3 14.7-43.3l-34-81.9c-6.7-16.1-24.4-24.4-41.3-19.5l-47.6 13.6c-20.1-15.6-42.8-28-67.4-36.3L305 12.7C302.2-5 287.2-18 269.2-18h-90.3c-18 0-33 13-35.8 30.7L135.8 62.9c-24.6 8.3-47.3 20.7-67.4 36.3L20.8 85.6C3.9 80.7-13.8 89-20.5 105.1l-34 81.9c-6.6 16-0.4 34.6 14.7 43.3l42.6 24.6c-2.7 13.9-4.2 28.3-4.2 43.1s1.5 29.2 4.2 43.1l-42.6 24.6c-15.1 8.7-21.3 27.3-14.7 43.3l34 81.9c6.7 16.1 24.4 24.4 41.3 19.5l47.6-13.6c20.1 15.6 42.8 28 67.4 36.3l7.3 50.2c2.8 17.7 17.8 30.7 35.8 30.7h90.3c18 0 33-13 35.8-30.7l7.3-50.2c24.6-8.3 47.3-20.7 67.4-36.3l47.6 13.6c16.9 4.9 34.6-3.4 41.3-19.5l34-81.9c6.6-16 .4-34.6-14.7-43.3zM224 352a96 96 0 1 1 0-192 96 96 0 1 1 0 192z",
-        "0 0 448 512",
-        "20",
-        "currentColor"
-      )
-    );
+async function requestResolveCanvasId(
+  brazeRestApiUrl: string,
+  brazeApiKey: string,
+  canvasName: string
+): Promise<ResolveCanvasIdResultMessage> {
+  if (extensionChrome === undefined) {
+    return { ok: false, message: "Chrome extension runtime is unavailable." };
   }
 
-  gear.addEventListener("mouseenter", () => {
-    gear.style.borderColor = BRAZE_PURPLE;
-    gear.style.background = BRAZE_PURPLE_SURFACE;
-  });
-  gear.addEventListener("mouseleave", () => {
-    gear.style.borderColor = BRAZE_BORDER;
-    gear.style.background = "#fff";
-  });
+  try {
+    return await new Promise<ResolveCanvasIdResultMessage>((resolve) => {
+      extensionChrome.runtime.sendMessage(
+        {
+          type: RESOLVE_CANVAS_ID_MESSAGE_TYPE,
+          brazeRestApiUrl,
+          brazeApiKey,
+          canvasName
+        },
+        (response) => {
+          const runtimeError = extensionChrome.runtime.lastError?.message;
+          if (runtimeError) {
+            resolve({ ok: false, message: runtimeError });
+            return;
+          }
+          if (response === undefined) {
+            resolve({
+              ok: false,
+              message: "Background worker did not respond."
+            });
+            return;
+          }
+          resolve(response as ResolveCanvasIdResultMessage);
+        }
+      );
+    });
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      message:
+        error instanceof Error ? error.message : "Extension runtime error."
+    };
+  }
+}
 
-  gear.addEventListener("click", () => {
+// ---------------------------------------------------------------------------
+// Settings Panel / Navigation Entry
+// ---------------------------------------------------------------------------
+
+function createTranslateNavIcon(): SVGSVGElement {
+  return createToastIcon(
+    "M4.545 6.714 4.11 8H3l1.862-5h1.284L8 8H6.833l-.435-1.286zm1.634-.736L5.5 3.956h-.049l-.679 2.022zM0 2a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v3h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-3H2a2 2 0 0 1-2-2zm2-1a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zm7.138 9.995q.289.451.63.846c-.748.575-1.673 1.001-2.768 1.292.178.217.451.635.555.867 1.125-.359 2.08-.844 2.886-1.494.777.665 1.739 1.165 2.93 1.472.133-.254.414-.673.629-.89-1.125-.253-2.057-.694-2.82-1.284.681-.747 1.222-1.651 1.621-2.757H14V8h-3v1.047h.765c-.318.844-.74 1.546-1.272 2.13a6 6 0 0 1-.415-.492 2 2 0 0 1-.94.31",
+    "0 0 16 16",
+    "24",
+    "currentColor"
+  );
+}
+
+function tryInjectTranslationsNavItem(): void {
+  const existing = document.getElementById("braze-ai-translations-nav-item");
+  if (existing) {
+    syncTranslationsNavItemState();
+    return;
+  }
+
+  const settingsButton = findSettingsNavigationButton();
+  const settingsContainer = settingsButton?.closest(
+    ".StyledSideNavigationButton__StyledSideNavButtonAndLinkContainer-sc-pdx9m9-2"
+  );
+  if (!(settingsButton instanceof HTMLButtonElement) || !(settingsContainer instanceof HTMLElement)) {
+    return;
+  }
+
+  const separator = document.createElement("div");
+  separator.id = "braze-ai-translations-nav-separator";
+  separator.className =
+    "StyledSideNavigationSeparator-sc-918ur1-0 hrykOm bcl-side-navigation-separator";
+
+  const itemContainer = document.createElement("div");
+  itemContainer.id = "braze-ai-translations-nav-item";
+  itemContainer.className =
+    "StyledSideNavigationButton__StyledSideNavButtonAndLinkContainer-sc-pdx9m9-2 fcDNSx";
+  itemContainer.dataset.active = "false";
+
+  const activeIndicator = document.createElement("div");
+  activeIndicator.className =
+    "StyledSideNavigationButton__StyledActiveIndicator-sc-pdx9m9-3 hHsbwI";
+  activeIndicator.style.display = "none";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.setAttribute("aria-label", "Translations");
+  button.className = settingsButton.className;
+  button.style.cursor = "pointer";
+
+  const content = document.createElement("div");
+  content.className =
+    "StyledSideNavigationButton__StyledSideNavButtonAndLinkContent-sc-pdx9m9-4 bHXeMK";
+  content.dataset.active = "false";
+  content.dataset.iconOnlyMode = "false";
+  content.dataset.isOpen = "false";
+
+  const iconWrapper = document.createElement("div");
+  iconWrapper.className =
+    "StyledFlex-sc-13lahx9-0 cZzVvX bcl-flex bcl-navigation-icon";
+  iconWrapper.style.color = "#8F9BA2";
+  const icon = createTranslateNavIcon();
+  icon.classList.add("bcl-side-navigation-button-icon");
+  iconWrapper.appendChild(icon);
+
+  const text = document.createElement("div");
+  text.className =
+    "StyledSideNavigationButton__StyledText-sc-pdx9m9-0 hYOXYT bcl-side-navigation-button-text";
+  text.textContent = "Translations";
+
+  content.appendChild(iconWrapper);
+  content.appendChild(text);
+  button.appendChild(content);
+  button.addEventListener("click", () => {
     toggleSettingsPanel();
   });
 
-  document.body.appendChild(gear);
+  itemContainer.appendChild(activeIndicator);
+  itemContainer.appendChild(button);
+
+  settingsContainer.insertAdjacentElement("afterend", itemContainer);
+  itemContainer.insertAdjacentElement("beforebegin", separator);
+  syncTranslationsNavItemState();
+}
+
+function findSettingsNavigationButton(): HTMLButtonElement | null {
+  const direct = document.querySelector(
+    "button[aria-label='Settings'][data-route='/settings']"
+  );
+  if (direct instanceof HTMLButtonElement) {
+    return direct;
+  }
+
+  for (const button of Array.from(document.querySelectorAll("button"))) {
+    if (!(button instanceof HTMLButtonElement)) {
+      continue;
+    }
+    const label = (button.getAttribute("aria-label") ?? "").trim().toLowerCase();
+    const text = normalizeButtonText(button.textContent ?? "");
+    if (label === "settings" || text === "settings") {
+      return button;
+    }
+  }
+
+  return null;
+}
+
+function syncTranslationsNavItemState(): void {
+  const itemContainer = document.getElementById("braze-ai-translations-nav-item");
+  if (!(itemContainer instanceof HTMLElement)) {
+    return;
+  }
+
+  const content = itemContainer.querySelector(
+    ".StyledSideNavigationButton__StyledSideNavButtonAndLinkContent-sc-pdx9m9-4"
+  );
+  const text = itemContainer.querySelector(
+    ".bcl-side-navigation-button-text"
+  );
+  const iconWrapper = itemContainer.querySelector(".bcl-navigation-icon");
+  const activeIndicator = itemContainer.querySelector(
+    ".StyledSideNavigationButton__StyledActiveIndicator-sc-pdx9m9-3"
+  );
+
+  itemContainer.dataset.active = settingsPanelVisible ? "true" : "false";
+
+  if (content instanceof HTMLElement) {
+    content.dataset.active = settingsPanelVisible ? "true" : "false";
+  }
+  if (text instanceof HTMLElement) {
+    text.style.color = settingsPanelVisible ? BRAZE_PURPLE : "";
+    text.style.fontWeight = settingsPanelVisible ? "700" : "";
+  }
+  if (iconWrapper instanceof HTMLElement) {
+    iconWrapper.style.color = settingsPanelVisible ? BRAZE_PURPLE : "#8F9BA2";
+  }
+  if (activeIndicator instanceof HTMLElement) {
+    activeIndicator.style.display = settingsPanelVisible ? "block" : "none";
+  }
 }
 
 let settingsPanelVisible = false;
+const SETTINGS_BACKDROP_ID = "braze-ai-settings-backdrop";
+
+function closeSettingsPanel(): void {
+  document.getElementById("braze-ai-settings-panel")?.remove();
+  document.getElementById(SETTINGS_BACKDROP_ID)?.remove();
+  settingsPanelVisible = false;
+  syncTranslationsNavItemState();
+}
 
 function toggleSettingsPanel(): void {
   const existing = document.getElementById("braze-ai-settings-panel");
   if (existing) {
-    existing.remove();
-    settingsPanelVisible = false;
+    closeSettingsPanel();
     return;
   }
 
   settingsPanelVisible = true;
+  syncTranslationsNavItemState();
   void renderSettingsPanel();
 }
 
 async function renderSettingsPanel(): Promise<void> {
-  const existing = document.getElementById("braze-ai-settings-panel");
-  if (existing) existing.remove();
+  closeSettingsPanel();
 
   const settings = await loadStoredSettings();
+
+  const backdrop = document.createElement("div");
+  backdrop.id = SETTINGS_BACKDROP_ID;
+  Object.assign(backdrop.style, {
+    position: "fixed",
+    inset: "0",
+    zIndex: "2147483645",
+    background: "rgba(26, 26, 46, 0.28)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "24px"
+  });
+  backdrop.addEventListener("click", () => {
+    closeSettingsPanel();
+  });
 
   const panel = document.createElement("div");
   panel.id = "braze-ai-settings-panel";
   Object.assign(panel.style, {
-    position: "fixed",
-    bottom: "72px",
-    left: "12px",
+    position: "relative",
     zIndex: "2147483646",
-    width: "360px",
-    maxWidth: "calc(100vw - 24px)",
+    width: "420px",
+    maxWidth: "min(420px, calc(100vw - 48px))",
     background: "rgba(255,255,255,0.98)",
     border: `1px solid ${BRAZE_BORDER_LIGHT}`,
     borderRadius: BRAZE_RADIUS_LG,
@@ -2400,6 +2295,9 @@ async function renderSettingsPanel(): Promise<void> {
     color: BRAZE_TEXT,
     padding: "24px",
     backdropFilter: "blur(8px)"
+  });
+  panel.addEventListener("click", (event) => {
+    event.stopPropagation();
   });
 
   const applyFieldStyles = (
@@ -2648,11 +2546,11 @@ async function renderSettingsPanel(): Promise<void> {
   panel.appendChild(body);
   panel.appendChild(actions);
 
-  document.body.appendChild(panel);
+  backdrop.appendChild(panel);
+  document.body.appendChild(backdrop);
 
   closeButton.addEventListener("click", () => {
-    panel.remove();
-    settingsPanelVisible = false;
+    closeSettingsPanel();
   });
 
   document
@@ -2998,11 +2896,11 @@ function bootstrap(): void {
     return;
   }
 
-  injectSettingsGear();
-
+  tryInjectTranslationsNavItem();
   tryInjectTranslateButton();
 
   const observer = new MutationObserver(() => {
+    tryInjectTranslationsNavItem();
     tryInjectTranslateButton();
   });
   observer.observe(document.body, { childList: true, subtree: true });

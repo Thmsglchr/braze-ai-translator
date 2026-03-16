@@ -31,7 +31,12 @@
   ],
   "content_scripts": [
     {
-      "matches": ["*://*.braze.com/*", "*://*.appboy.com/*", "*://*.braze.eu/*"],
+      "matches": [
+        "*://*.braze.com/*",
+        "*://*.appboy.com/*",
+        "*://*.braze.eu/*",
+        "*://*.getbee.io/*"
+      ],
       "all_frames": true,
       "match_about_blank": true,
       "js": [

@@ -11,13 +11,17 @@ import {
   type CanvasTranslateHttpResponse
 } from "./backendClient.js";
 import {
+  findCanvasIdByName,
   getWrapTranslationContextMenuCreateProperties,
-  shouldRetryWrapTranslationMessage
+  shouldRetryWrapTranslationMessage,
+  type BrazeCanvasListItem
 } from "./backgroundShared.js";
 
 const RUN_TRANSFORM_MESSAGE_TYPE = "braze-ai-translator/run-transform";
 const TRANSLATE_CANVAS_MESSAGE_TYPE =
   "braze-ai-translator/translate-canvas";
+const RESOLVE_CANVAS_ID_MESSAGE_TYPE =
+  "braze-ai-translator/resolve-canvas-id";
 const WRAP_TRANSLATION_TAG_MESSAGE_TYPE =
   "braze-ai-translator/wrap-translation-tag";
 const TOGGLE_SETTINGS_PANEL_MESSAGE_TYPE =
@@ -32,8 +36,16 @@ interface TransformRequestMessage {
 interface TranslateCanvasRequestMessage {
   readonly type: typeof TRANSLATE_CANVAS_MESSAGE_TYPE;
   readonly backendBaseUrl: string;
-  readonly canvasId: string;
+  readonly canvasId?: string;
+  readonly canvasName?: string;
   readonly headers: CanvasTranslateHeaders;
+}
+
+interface ResolveCanvasIdRequestMessage {
+  readonly type: typeof RESOLVE_CANVAS_ID_MESSAGE_TYPE;
+  readonly brazeRestApiUrl: string;
+  readonly brazeApiKey: string;
+  readonly canvasName: string;
 }
 
 interface TransformSuccessMessage {
@@ -53,7 +65,14 @@ type BackgroundMessageResponse =
   | TransformSuccessMessage
   | TransformFailureMessage
   | CanvasTranslateHttpResponse
+  | ResolveCanvasIdResponse
   | { readonly ok: boolean; readonly message?: string };
+
+interface ResolveCanvasIdResponse {
+  readonly ok: boolean;
+  readonly canvasId?: string;
+  readonly message?: string;
+}
 
 interface ChromeRuntimeMessageSender {}
 
@@ -151,15 +170,11 @@ if (extensionChrome !== undefined) {
         tab.id,
         message,
         { frameId: info.frameId },
-        (response) => {
-          if (
-            shouldRetryWrapTranslationMessage(
-              extensionChrome.runtime.lastError?.message,
-              response
-            )
-          ) {
-            extensionChrome.tabs?.sendMessage(tab.id!, message);
-          }
+        (_response) => {
+          // Clear any lastError to avoid "unchecked runtime.lastError" warnings.
+          // Do NOT retry without frameId -- that would broadcast to all frames
+          // and open duplicate modals.
+          void extensionChrome.runtime.lastError;
         }
       );
     }
@@ -209,6 +224,22 @@ if (extensionChrome !== undefined) {
         return true;
       }
 
+      if (isResolveCanvasIdRequestMessage(message)) {
+        void handleResolveCanvasIdRequest(message)
+          .then(sendResponse)
+          .catch((error: unknown) =>
+            sendResponse({
+              ok: false,
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Unknown extension error."
+            })
+          );
+
+        return true;
+      }
+
       return undefined;
     }
   );
@@ -226,8 +257,54 @@ async function handleTranslateCanvasRequest(
   return postCanvasTranslate(
     message.backendBaseUrl,
     message.canvasId,
-    message.headers
+    message.headers,
+    message.canvasName
   );
+}
+
+async function handleResolveCanvasIdRequest(
+  message: ResolveCanvasIdRequestMessage
+): Promise<ResolveCanvasIdResponse> {
+  const normalizedBaseUrl = message.brazeRestApiUrl.replace(/\/+$/, "");
+  const maxPages = 50;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const url = new URL(`${normalizedBaseUrl}/canvas/list`);
+    url.searchParams.set("page", String(page));
+    url.searchParams.set("include_archived", "true");
+    url.searchParams.set("sort_direction", "desc");
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${message.brazeApiKey}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    const body = await parseJsonResponse(response);
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: `Braze GET /canvas/list returned ${response.status}: ${JSON.stringify(body)}`
+      };
+    }
+
+    const canvases = parseCanvasListItems(body);
+    const canvasId = findCanvasIdByName(canvases, message.canvasName);
+    if (canvasId) {
+      return { ok: true, canvasId };
+    }
+
+    if (canvases.length === 0) {
+      break;
+    }
+  }
+
+  return {
+    ok: false,
+    message: `Could not find a canvas named "${message.canvasName}".`
+  };
 }
 
 function isTransformRequestMessage(
@@ -254,9 +331,66 @@ function isTranslateCanvasRequestMessage(
   return (
     value.type === TRANSLATE_CANVAS_MESSAGE_TYPE &&
     typeof value.backendBaseUrl === "string" &&
-    typeof value.canvasId === "string" &&
+    (typeof value.canvasId === "string" || typeof value.canvasName === "string") &&
     isRecord(value.headers)
   );
+}
+
+function isResolveCanvasIdRequestMessage(
+  value: unknown
+): value is ResolveCanvasIdRequestMessage {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    value.type === RESOLVE_CANVAS_ID_MESSAGE_TYPE &&
+    typeof value.brazeRestApiUrl === "string" &&
+    typeof value.brazeApiKey === "string" &&
+    typeof value.canvasName === "string"
+  );
+}
+
+async function parseJsonResponse(response: Response): Promise<unknown> {
+  const responseText = await response.text();
+
+  if (responseText.length === 0) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    return responseText;
+  }
+}
+
+function parseCanvasListItems(value: unknown): readonly BrazeCanvasListItem[] {
+  if (!isRecord(value) || !Array.isArray(value.canvases)) {
+    return [];
+  }
+
+  return value.canvases.flatMap((canvas): BrazeCanvasListItem[] => {
+    if (!isRecord(canvas)) {
+      return [];
+    }
+
+    if (typeof canvas.id !== "string" || typeof canvas.name !== "string") {
+      return [];
+    }
+
+    return [
+      {
+        id: canvas.id,
+        name: canvas.name,
+        tags: Array.isArray(canvas.tags)
+          ? canvas.tags.filter((tag): tag is string => typeof tag === "string")
+          : [],
+        last_edited:
+          typeof canvas.last_edited === "string" ? canvas.last_edited : undefined
+      }
+    ];
+  });
 }
 
 function getExtensionChrome(): ChromeRuntimeLike | undefined {

@@ -811,9 +811,20 @@ export const BrazeTemplatePushResultSchema = z
     }
   });
 
-export const CanvasTranslateRequestSchema = z.object({
-  canvasId: NonBlankStringSchema
-});
+export const CanvasTranslateRequestSchema = z
+  .object({
+    canvasId: NonBlankStringSchema.optional(),
+    canvasName: z.string().min(1).optional()
+  })
+  .refine(
+    (data) =>
+      (data.canvasId !== undefined && data.canvasId.length > 0) ||
+      (data.canvasName !== undefined && data.canvasName.trim().length > 0),
+    {
+      message: "Either canvasId or canvasName must be provided.",
+      path: ["canvasId"]
+    }
+  );
 
 export const CanvasStepResultStatusSchema = z.enum([
   "success",
