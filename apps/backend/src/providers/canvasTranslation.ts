@@ -69,9 +69,11 @@ export class CanvasTranslationWorkflowProvider
       }
     }
 
-    const stepsProcessed = stepResults.filter(
-      (r) => r.status !== "skipped"
-    ).length;
+    const stepsProcessed = new Set(
+      stepResults
+        .filter((r) => r.status !== "skipped")
+        .map((r) => r.stepId)
+    ).size;
     const hasSuccess = stepResults.some((r) => r.status === "success");
     const allSuccess = stepResults.every(
       (r) => r.status === "success" || r.status === "skipped"

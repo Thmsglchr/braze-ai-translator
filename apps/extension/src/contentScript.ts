@@ -2930,6 +2930,17 @@ function summarizeCanvasTranslateResult(
 ): { readonly message: string; readonly type: ToastType } {
   const pushed = result.totalTranslationsPushed;
   const steps = result.stepsProcessed;
+
+  const allLocales = new Set(
+    result.stepResults.flatMap((r) => r.localesTranslated)
+  );
+  const localeCount = allLocales.size;
+
+  const summary =
+    localeCount > 0
+      ? `${pushed} field(s) translated into ${localeCount} locale(s) across ${steps} step(s).`
+      : `${pushed} translation(s) pushed across ${steps} step(s).`;
+
   const firstError =
     result.errors[0] ??
     result.stepResults.find((stepResult) => stepResult.errors.length > 0)
@@ -2937,7 +2948,7 @@ function summarizeCanvasTranslateResult(
 
   if (result.resultStatus === "success") {
     return {
-      message: `Translation complete: ${pushed} translations pushed across ${steps} step(s).`,
+      message: `Translation complete: ${summary}`,
       type: "success"
     };
   }
@@ -2945,8 +2956,8 @@ function summarizeCanvasTranslateResult(
   if (result.resultStatus === "partial") {
     return {
       message: firstError
-        ? `Translation partially complete: ${pushed} translations pushed across ${steps} step(s). First error: ${firstError}`
-        : `Translation partially complete: ${pushed} translations pushed across ${steps} step(s).`,
+        ? `Translation partially complete: ${summary} First error: ${firstError}`
+        : `Translation partially complete: ${summary}`,
       type: "warning"
     };
   }

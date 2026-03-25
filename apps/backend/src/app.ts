@@ -318,8 +318,7 @@ async function executeRoute<TResponse>(
       );
     }
 
-    const errorMessage =
-      error instanceof Error ? error.message : "Unknown error";
+    const errorMessage = extractErrorMessage(error);
 
     return sendApiError(
       reply,
@@ -405,6 +404,24 @@ function getHeader(
   }
 
   return undefined;
+}
+
+function extractErrorMessage(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return "Unknown error";
+  }
+
+  const parts = [error.message];
+
+  let current: unknown = (error as Error & { cause?: unknown }).cause;
+  let depth = 0;
+  while (current instanceof Error && depth < 5) {
+    parts.push(current.message);
+    current = (current as Error & { cause?: unknown }).cause;
+    depth += 1;
+  }
+
+  return parts.join(" → ");
 }
 
 function createNowIsoTimestamp(): string {
